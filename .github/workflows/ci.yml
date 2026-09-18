@@ -1,0 +1,115 @@
+# SPDX-License-Identifier: Apache-2.0
+# Part of bitwise-bus -- inferring undocumented bus protocols from captures.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host:
+    name: ${{ matrix.compiler }} / ${{ matrix.build_type }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        build_type: [Debug, RelWithDebInfo]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Configure
+        env:
+          CC: ${{ matrix.compiler == 'gcc' && 'gcc' || 'clang' }}
+          CXX: ${{ matrix.compiler == 'gcc' && 'g++' || 'clang++' }}
+        run: |
+          cmake -S . -B build -G Ninja \
+                -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+                -DBW_WERROR=ON
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      # End to end, on frames generated outside the tool: the search has to
+      # recover an algorithm it was never told about. No unit test covers
+      # argument parsing or file reading.
+      - name: Identify a real protocol from raw frames
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/frames
+          python3 - <<'PY'
+          import os, random
+          def crc16_modbus(data):
+              crc = 0xFFFF
+              for b in data:
+                  crc ^= b
+                  for _ in range(8):
+                      crc = (crc >> 1) ^ 0xA001 if (crc & 1) else (crc >> 1)
+              return crc
+          random.seed(7)
+          for i in range(6):
+              body = bytes([0x11, 0x03]) + bytes(random.randrange(256) for _ in range(8))
+              c = crc16_modbus(body)
+              open("/tmp/frames/f%d.bin" % i, "wb").write(body + bytes([c & 0xFF, c >> 8]))
+          PY
+          ./build/bitwise crc-catalog
+          ./build/bitwise crc-find /tmp/frames/*.bin | tee /tmp/out.txt
+          grep -q "CRC-16/MODBUS" /tmp/out.txt
+          grep -q "little-endian" /tmp/out.txt
+          grep -q "comfortably more evidence" /tmp/out.txt
+
+      # Noise must produce no answer. A tool that confidently names a
+      # protocol that is not there is worse than one that finds nothing.
+      - name: Refuse to find a protocol in random bytes
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/noise
+          for i in 0 1 2 3 4 5; do
+            head -c 20 /dev/urandom > /tmp/noise/n$i.bin
+          done
+          if ./build/bitwise crc-find /tmp/noise/*.bin | grep -q "comfortably more evidence"; then
+            echo "claimed a confident match on random bytes"
+            exit 1
+          fi
+          echo "no false positive on noise"
+
+  sanitizers:
+    name: asan + ubsan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Configure
+        run: |
+          cmake -S . -B build-san -G Ninja \
+                -DCMAKE_BUILD_TYPE=Debug \
+                -DBW_WERROR=ON \
+                -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all"
+
+      - name: Build
+        run: cmake --build build-san -j
+
+      - name: Test
+        env:
+          UBSAN_OPTIONS: print_stacktrace=1
+          ASAN_OPTIONS: detect_leaks=1
+        run: ./build-san/bw_tests
