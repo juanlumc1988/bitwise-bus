@@ -96,8 +96,19 @@ that are the normal case, not an edge case.
 
 ## Build and test
 
-Needs CMake 3.16+ and a C++17 compiler. No dependencies to install: doctest
-is vendored, nothing else is used.
+Needs CMake 3.16+, Ninja, and a C++17 compiler. No library dependencies to
+install: doctest is vendored, nothing else is used.
+
+On Ubuntu/Debian, that's:
+
+```console
+sudo apt install cmake ninja-build g++
+```
+
+(`g++` pulls in the compiler; swap it for `clang` if you'd rather use Clang.
+If you'd rather not install Ninja, drop `-G Ninja` below — CMake falls back
+to Unix Makefiles, which `build-essential`/`g++` already provides `make`
+for.)
 
 ```console
 git clone https://github.com/juanlumc1988/bitwise-bus.git
