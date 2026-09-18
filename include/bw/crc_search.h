@@ -53,8 +53,18 @@ struct Layout {
 
     std::size_t field_bytes() const { return width / 8u; }
 
-    // False when the frame is too short for this layout to make sense.
+    // False when this layout cannot be read out of a frame of that length:
+    // too short, or a width that is not a whole number of bytes.
+    //
+    // The width condition matters as much as the length one. field_bytes()
+    // is width/8, so a 15-bit CRC would claim a one-byte field and the
+    // extraction would quietly return eight bits of a fifteen-bit value.
+    // crc_compute is perfectly happy with such widths -- CAN and CAN-FD use
+    // them -- but locating the field needs bit-level framing, so a layout
+    // that claims to is refused rather than half-honoured.
     bool fits(std::size_t frame_len) const;
+
+    // Only meaningful when fits(frame_len) is true; underflows otherwise.
     std::size_t checksum_offset(std::size_t frame_len) const;
     std::size_t covered_begin() const { return header_skip; }
     std::size_t covered_end(std::size_t frame_len) const;
@@ -93,7 +103,13 @@ struct SearchReport {
     // The measure of how much the answer is worth.
     u32 evidence_bits = 0;
 
-    bool unique() const { return candidates.size() == 1; }
+    // More candidates matched than max_candidates allowed, so the list below
+    // is incomplete. A capped list can look unique when it is not, which is
+    // the one conclusion a caller must never reach by accident -- so
+    // confident() refuses while this is set.
+    bool truncated = false;
+
+    bool unique() const { return !truncated && candidates.size() == 1; }
 
     // One candidate, and enough evidence that it being chance is not worth
     // considering. Anything less and the caller should be shown the

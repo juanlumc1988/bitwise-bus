@@ -180,3 +180,54 @@ TEST_CASE("catalogue entries are distinct") {
         }
     }
 }
+
+TEST_CASE("a malformed spec still produces a value within its width") {
+    // CrcSpec is public, and nothing stops a caller typing a polynomial with
+    // bits above the declared width -- a transcription slip, or a width
+    // corrected without correcting the rest. The result must stay inside the
+    // width regardless, because every caller treats it as a value of that
+    // many bits. No catalogue entry exercises this, so without it the final
+    // mask is untested code that looks load-bearing.
+    std::vector<u8> data(12);
+    for (std::size_t i = 0; i < data.size(); ++i) {
+        data[i] = static_cast<u8>(i * 17u + 5u);
+    }
+
+    SUBCASE("polynomial wider than the width") {
+        bw::CrcSpec bad = { "bogus", 8, 0xDEADBEEFu, 0x00, false, false, 0x00, 0 };
+        const u64 value = bw::crc_compute(bad, data.data(), data.size());
+        CHECK((value & ~0xFFull) == 0u);
+    }
+    SUBCASE("init wider than the width") {
+        bw::CrcSpec bad = { "bogus", 8, 0x07, 0xFFFFFFFFu, false, false, 0x00, 0 };
+        const u64 value = bw::crc_compute(bad, data.data(), data.size());
+        CHECK((value & ~0xFFull) == 0u);
+    }
+    SUBCASE("xorout wider than the width") {
+        bw::CrcSpec bad = { "bogus", 16, 0x1021, 0x0000, false, false, 0xFFFFFFFFu, 0 };
+        const u64 value = bw::crc_compute(bad, data.data(), data.size());
+        CHECK((value & ~0xFFFFull) == 0u);
+    }
+    SUBCASE("all three at once, reflected") {
+        bw::CrcSpec bad = { "bogus", 12, 0xFFFFFFFFu, 0xFFFFFFFFu, true, true,
+                            0xFFFFFFFFu, 0 };
+        const u64 value = bw::crc_compute(bad, data.data(), data.size());
+        CHECK((value & ~0xFFFull) == 0u);
+    }
+}
+
+TEST_CASE("an out-of-range width yields zero rather than shifting by 64") {
+    std::vector<u8> data(4, 0xA5);
+
+    bw::CrcSpec zero_width = { "bogus", 0, 0x07, 0x00, false, false, 0x00, 0 };
+    CHECK(bw::crc_compute(zero_width, data.data(), data.size()) == 0u);
+
+    bw::CrcSpec too_wide = { "bogus", 65, 0x07, 0x00, false, false, 0x00, 0 };
+    CHECK(bw::crc_compute(too_wide, data.data(), data.size()) == 0u);
+
+    // 64 is the widest legal value and must work, not trip the guard.
+    bw::CrcSpec widest = { "bogus", 64, 0x42F0E1EBA9EA3693ULL, 0x00,
+                           false, false, 0x00, 0 };
+    const u64 value = bw::crc_compute(widest, data.data(), data.size());
+    CHECK(value != 0u);   // it computed something rather than bailing out
+}

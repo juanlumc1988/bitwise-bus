@@ -15,10 +15,15 @@ const u32 kConfidentEvidenceBits = 32;
 } // namespace
 
 bool Layout::fits(std::size_t frame_len) const {
+    // Byte-aligned widths only; see the header for why a 15-bit field cannot
+    // be read by this code even though the CRC itself is fine with it.
+    if (width == 0 || width % 8u != 0) {
+        return false;
+    }
     // The covered range must be non-empty: a CRC over zero bytes is the same
     // constant for every frame, which matches trivially and means nothing.
     const std::size_t overhead = header_skip + trailer_skip + field_bytes();
-    return field_bytes() > 0 && frame_len > overhead;
+    return frame_len > overhead;
 }
 
 std::size_t Layout::checksum_offset(std::size_t frame_len) const {
@@ -121,10 +126,16 @@ SearchReport search(const std::vector<Frame>& frames,
 
         // A one-byte field has no byte order, so trying both would report
         // the same finding twice and make every 8-bit search look ambiguous.
-        const int endian_count = (spec.width <= 8u) ? 1 : 2;
+        // Collapsing them must not land on an option the caller switched
+        // off, though: asking for little-endian only and getting no search
+        // at all would be a silent no-answer.
+        const bool single_byte  = (spec.width <= 8u);
+        const int  endian_count = single_byte ? 1 : 2;
 
         for (int e = 0; e < endian_count; ++e) {
-            if (!endians[e]) {
+            const bool enabled = single_byte ? (endians[0] || endians[1])
+                                             : endians[e];
+            if (!enabled) {
                 continue;
             }
             for (std::size_t trailer = 0; trailer <= options.max_trailer_skip; ++trailer) {
@@ -148,6 +159,8 @@ SearchReport search(const std::vector<Frame>& frames,
                         found.spec   = &spec;
                         found.layout = layout;
                         report.candidates.push_back(found);
+                    } else {
+                        report.truncated = true;
                     }
                 }
             }

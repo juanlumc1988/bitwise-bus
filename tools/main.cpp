@@ -105,6 +105,11 @@ int cmd_find(const std::vector<std::string>& paths,
                     c.layout.big_endian ? "big-endian" : "little-endian");
     }
 
+    if (report.truncated) {
+        std::printf("\n...and more: the list above is capped. Whatever else\n"
+                    "matched is not shown, so do not read it as complete.\n");
+    }
+
     std::printf("\n%u bits of evidence.\n", report.evidence_bits);
     if (report.confident()) {
         std::printf("One candidate, comfortably more evidence than chance "

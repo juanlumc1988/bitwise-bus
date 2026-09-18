@@ -46,6 +46,12 @@ u64 crc_compute(const CrcSpec& spec, const u8* data, std::size_t len) {
         for (int bit = 7; bit >= 0; --bit) {
             const bool in  = ((byte >> bit) & 1u) != 0;
             const bool top = (crc & topbit) != 0;
+            // Masking here keeps the register bounded. Strictly it changes
+            // no result -- bits pushed above the width only ever move
+            // further up and can never return to influence the top-bit test
+            // -- but an unbounded register would eventually shift off the
+            // end of u64, and reasoning about that is not worth the cycle
+            // saved.
             crc = (crc << 1) & mask;
             if (in != top) {
                 crc ^= spec.poly;

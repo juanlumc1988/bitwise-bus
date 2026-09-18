@@ -339,3 +339,100 @@ TEST_CASE("extract_checksum reads both byte orders") {
     wide.big_endian = true;
     CHECK_FALSE(wide.fits(frame.bytes.size()));   // nothing left to cover
 }
+
+TEST_CASE("a layout whose width is not a whole number of bytes is refused") {
+    // field_bytes() is width/8, so a 15-bit CRC would claim a one-byte
+    // field and extract_checksum would silently return eight bits of a
+    // fifteen-bit value. search() skips these widths, but Layout,
+    // extract_checksum and verify are public, and a caller building a
+    // 15-bit layout by hand deserves a refusal rather than plausible
+    // rubbish.
+    bw::Layout can;
+    can.width = 15;
+    CHECK_FALSE(can.fits(32));
+
+    bw::Layout fd;
+    fd.width = 17;
+    CHECK_FALSE(fd.fits(32));
+
+    bw::Layout ok;
+    ok.width = 16;
+    CHECK(ok.fits(32));
+
+    // And verify must not accept one either.
+    const bw::CrcSpec* spec = bw::catalog_find("CRC-15/CAN");
+    REQUIRE(spec != nullptr);
+    std::vector<bw::Frame> frames;
+    bw::Frame              frame;
+    frame.bytes.resize(8, 0x5A);
+    frames.push_back(frame);
+    CHECK_FALSE(bw::verify(frames, can, *spec));
+}
+
+TEST_CASE("asking for only one byte order still finds a one-byte checksum") {
+    // A one-byte field has no byte order, so the search collapses the two
+    // into one pass. It must not collapse them onto an option the caller
+    // switched off -- that would silently search nothing.
+    const bw::CrcSpec* spec = bw::catalog_find("CRC-8");
+    REQUIRE(spec != nullptr);
+
+    bw::Layout layout;
+    layout.width = 8;
+    const std::vector<bw::Frame> frames = synthesise(*spec, layout, 8, 10);
+
+    bw::SearchOptions little_only;
+    little_only.try_big_endian    = false;
+    little_only.try_little_endian = true;
+
+    const bw::SearchReport report = bw::search(frames, little_only);
+    CHECK(contains(report, "CRC-8"));
+
+    // Symmetrically, big-endian only.
+    bw::SearchOptions big_only;
+    big_only.try_big_endian    = true;
+    big_only.try_little_endian = false;
+    CHECK(contains(bw::search(frames, big_only), "CRC-8"));
+
+    // Neither is a caller error, and must find nothing rather than assume.
+    bw::SearchOptions none;
+    none.try_big_endian    = false;
+    none.try_little_endian = false;
+    CHECK(bw::search(frames, none).candidates.empty());
+}
+
+TEST_CASE("a truncated candidate list is not mistaken for a unique answer") {
+    // max_candidates caps the list. If the cap is hit, the report holds
+    // fewer candidates than were actually found -- and a cap of one would
+    // make an ambiguous result look unique, which is the one conclusion the
+    // caller must never draw by accident.
+    // Frames of zeroes match CRC-8 (init 0, xorout 0) at every header skip,
+    // because the CRC of any run of zero bytes is zero and so is the
+    // checksum field. That is a genuinely ambiguous corpus, and a
+    // deterministic one -- which is what this test needs, since asserting
+    // that a truncation happened requires actually causing one.
+    std::vector<bw::Frame> zeroes;
+    for (std::size_t f = 0; f < 3u; ++f) {
+        bw::Frame frame;
+        frame.bytes.resize(6, 0x00);
+        zeroes.push_back(frame);
+    }
+
+    // Raised well above what this corpus produces -- the default cap of 64
+    // is not enough for frames of zeroes, which is itself worth knowing.
+    bw::SearchOptions roomy;
+    roomy.max_candidates = 100000;
+    const bw::SearchReport full = bw::search(zeroes, roomy);
+    REQUIRE(full.candidates.size() > 1u);   // genuinely ambiguous
+    CHECK_FALSE(full.truncated);
+    CHECK_FALSE(full.unique());
+
+    bw::SearchOptions capped;
+    capped.max_candidates = 1;
+    const bw::SearchReport report = bw::search(zeroes, capped);
+
+    CHECK(report.candidates.size() == 1u);
+    CHECK(report.truncated);
+    // The whole point: one candidate in the list, but not a unique answer.
+    CHECK_FALSE(report.unique());
+    CHECK_FALSE(report.confident());
+}
