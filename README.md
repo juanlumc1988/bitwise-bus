@@ -94,6 +94,48 @@ forty times carries exactly as much evidence as one heartbeat. Counting it
 forty times would manufacture confidence out of nothing, and captures like
 that are the normal case, not an edge case.
 
+## Downloads
+
+Each [tagged release](https://github.com/juanlumc1988/bitwise-bus/releases/latest)
+carries the `bitwise` CLI and the `bw_core` static library with its headers,
+one archive per platform. The links below always point at the latest release.
+
+| Platform | Archive |
+| --- | --- |
+| Linux x86-64 | [`bitwise-bus-linux-x86_64.tar.gz`](https://github.com/juanlumc1988/bitwise-bus/releases/latest/download/bitwise-bus-linux-x86_64.tar.gz) |
+| Linux aarch64 | [`bitwise-bus-linux-aarch64.tar.gz`](https://github.com/juanlumc1988/bitwise-bus/releases/latest/download/bitwise-bus-linux-aarch64.tar.gz) |
+| Linux armv7 (hard float) | [`bitwise-bus-linux-armv7.tar.gz`](https://github.com/juanlumc1988/bitwise-bus/releases/latest/download/bitwise-bus-linux-armv7.tar.gz) |
+| macOS (arm64 + x86-64) | [`bitwise-bus-macos-universal.tar.gz`](https://github.com/juanlumc1988/bitwise-bus/releases/latest/download/bitwise-bus-macos-universal.tar.gz) |
+| Windows x64, MSVC | [`bitwise-bus-windows-x64-msvc.zip`](https://github.com/juanlumc1988/bitwise-bus/releases/latest/download/bitwise-bus-windows-x64-msvc.zip) |
+| Windows arm64, MSVC | [`bitwise-bus-windows-arm64-msvc.zip`](https://github.com/juanlumc1988/bitwise-bus/releases/latest/download/bitwise-bus-windows-arm64-msvc.zip) |
+| Windows x64, MinGW-w64 | [`bitwise-bus-windows-x64-mingw.zip`](https://github.com/juanlumc1988/bitwise-bus/releases/latest/download/bitwise-bus-windows-x64-mingw.zip) |
+
+An archive unpacks to `bitwise-bus-<version>-<platform>/`, holding `bin/bitwise`,
+`lib/`, `include/bw/` and the CMake package files. `SHA256SUMS` is attached to
+the release.
+
+To use the library from CMake, point `CMAKE_PREFIX_PATH` at the unpacked
+directory:
+
+```cmake
+find_package(bitwise-bus 0.1 CONFIG REQUIRED)
+target_link_libraries(my_tool PRIVATE bw::core)
+```
+
+Or by hand: `-I<dir>/include` and `<dir>/lib/libbw_core.a` (`bw_core.lib` with
+MSVC).
+
+- **Static only.** The API passes `std::vector`, so a shared library's ABI
+  would tie every consumer to one compiler and C++ runtime. The headers need
+  C++11; the library itself is built as C++17.
+- **MSVC** packages use the dynamic runtime (`/MD`). They ship both
+  `bw_core.lib` and `bw_cored.lib`, because Release and Debug are not
+  link-compatible under MSVC; `find_package` picks the right one.
+- **Linux** binaries are built on Ubuntu 22.04, so the CLI needs glibc 2.35 or
+  newer and nothing else. **macOS** needs 11 or newer.
+- Before 1.0 the API can change between minor versions, so
+  `find_package(bitwise-bus 0.1 ...)` accepts 0.1.x only.
+
 ## Build and test
 
 Needs CMake 3.16+, Ninja, and a C++17 compiler. No library dependencies to

@@ -1,0 +1,156 @@
+# SPDX-License-Identifier: Apache-2.0
+# Part of bitwise-bus -- inferring undocumented bus protocols from captures.
+#
+# Builds, tests and archives the CLI and the static library for every
+# supported platform. scripts/package.sh does the work, so any package can be
+# reproduced locally. Pull requests build the packages as a portability check;
+# a v* tag publishes them as a GitHub release.
+#
+# Releasing: set `project(bitwise-bus VERSION x.y.z ...)` in CMakeLists.txt,
+# merge, then
+#     git tag vX.Y.Z && git push origin vX.Y.Z
+# Every job checks the tag against the project version before building.
+
+name: Package
+
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  package:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux is built on the oldest runner on purpose: the CLI links glibc
+          # dynamically, so it needs at least the glibc it was built against.
+          - platform: linux-x86_64
+            os: ubuntu-22.04
+            expect_arch: 'x86-64'
+
+          - platform: linux-aarch64
+            os: ubuntu-22.04-arm
+            expect_arch: 'aarch64'
+
+          # Cross-built; qemu-user runs the unit tests and the CLI.
+          - platform: linux-armv7
+            os: ubuntu-22.04
+            cmake_args: -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/arm-linux-gnueabihf.cmake
+            emulator: qemu-arm -L /usr/arm-linux-gnueabihf
+            expect_arch: '32-bit.*ARM.*EABI5'
+
+          # One fat library and CLI; the runner is arm64, so the arm64 slice is
+          # the one the tests execute.
+          - platform: macos-universal
+            os: macos-latest
+            cmake_args: -DCMAKE_OSX_ARCHITECTURES=arm64;x86_64 -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+            expect_arch: 'universal.*x86_64.*arm64'
+
+          # MSVC: Release and Debug static libraries are not link-compatible,
+          # so both ship in the same package.
+          - platform: windows-x64-msvc
+            os: windows-latest
+            cmake_args: -A x64
+            configs: Release Debug
+            archive: zip
+            expect_arch: 'x86-64'
+
+          - platform: windows-arm64-msvc
+            os: windows-11-arm
+            cmake_args: -A ARM64
+            configs: Release Debug
+            archive: zip
+            expect_arch: 'aarch64|arm64'
+
+          - platform: windows-x64-mingw
+            os: windows-latest
+            shell: 'msys2 {0}'
+            cmake_args: -G Ninja
+            archive: zip
+            expect_arch: 'x86-64'
+
+    defaults:
+      run:
+        shell: ${{ matrix.shell || 'bash' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the ARM cross toolchain and qemu
+        if: matrix.platform == 'linux-armv7'
+        shell: bash
+        run: sudo apt-get update && sudo apt-get install -y g++-arm-linux-gnueabihf qemu-user
+
+      - name: Install MinGW-w64
+        if: matrix.platform == 'windows-x64-mingw'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            file
+
+      - name: Build, test and package
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          CMAKE_ARGS: ${{ matrix.cmake_args }}
+          BW_CONFIGS: ${{ matrix.configs || 'Release' }}
+          BW_ARCHIVE: ${{ matrix.archive || 'tar.gz' }}
+          BW_EMULATOR: ${{ matrix.emulator }}
+          BW_EXPECT_ARCH: ${{ matrix.expect_arch }}
+          BW_EXPECT_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+        # CMAKE_ARGS is split on whitespace on purpose; it holds no quoting.
+        run: bash scripts/package.sh "$PLATFORM" $CMAKE_ARGS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ matrix.platform }}
+          path: dist/bitwise-bus-${{ matrix.platform }}.*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: package-*
+          merge-multiple: true
+          path: dist
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum bitwise-bus-* | tee SHA256SUMS
+
+      # gh needs no checkout when told the repository. A re-run of the job
+      # replaces the assets instead of failing on the existing release.
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" dist/* --title "$TAG" --generate-notes \
+              --verify-tag --repo "$GITHUB_REPOSITORY"
+          fi

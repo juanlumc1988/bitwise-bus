@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# Part of bitwise-bus -- inferring undocumented bus protocols from captures.
+#
+#   find_package(bitwise-bus CONFIG REQUIRED)
+#   target_link_libraries(app PRIVATE bw::core)
+
+@PACKAGE_INIT@
+
+include("${CMAKE_CURRENT_LIST_DIR}/bitwise-bus-targets.cmake")
