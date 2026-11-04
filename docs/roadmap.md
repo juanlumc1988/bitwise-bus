@@ -221,14 +221,33 @@ the reason the README gives for `rewind-mcu`.
   format**, defined in stage 1: an exporter on the `rewind` side and an importer
   here, with no shared code.
 - **[bridgefex](https://github.com/juanlumc1988/bridgefex)** generates a pure C
-  layer and Python bindings from C++ headers. Judged by its README, not tried:
-  its supported subset takes plain value structs, `std::vector` of scalars and
-  value structs, and opaque handles for classes. It does not take raw-pointer
-  members, methods on value structs, or a vector inside a value struct, which
-  today's `bw_core` headers use. Binding `bw_core` would need a thin facade of
-  handles and accessors, and new stage APIs can be written with that subset in
-  mind from the start. If a gap shows up there, it is also feedback for
-  bridgefex.
+  layer and Python bindings from C++ headers. It was run on the `bw_core`
+  headers of 0.1.0 (bridgefex 0.1.0, libclang 20.1.2, Python 3.13) and
+  **rejects them**. It is all-or-nothing, so it generated nothing, and it
+  reported 28 errors:
+  - 15 type aliases: `bw::u8`, `u16`, `u32`, `u64`;
+  - 7 methods on value structs: `Layout` (5) and `SearchReport` (2);
+  - 4 raw pointers: the `data` parameter of `crc_compute`, the results of
+    `catalog()` and `catalog_find()`, and `Candidate::spec`;
+  - 1 string member: `CrcSpec::name`, a `const char*`;
+  - 1 container inside a value struct: `SearchReport::candidates`.
+
+  Run again on a copy with the aliases replaced by the `<cstdint>` types they
+  stand for, 14 errors remain: the 13 above that are not aliases, plus the
+  `std::vector` inside `Frame`, which an alias error had been hiding. So the
+  aliases are cheap to avoid in new public headers, and everything else means
+  `bw_core` would be bound through a thin facade of opaque handles and
+  accessors, not directly. The shapes a facade can use (plain value structs,
+  `std::vector` of scalars and value structs as parameters and results, opaque
+  handles) come from bridgefex's README and have not been tried. To repeat the
+  run, from a directory holding `include/bw/`:
+
+  ```console
+  bridgefex --module bw --output out --std c++17 -I include --include-root include \
+      include/bw/types.h include/bw/crc.h include/bw/catalog.h include/bw/crc_search.h
+  ```
+
+  If a gap shows up when binding, it is also feedback for bridgefex.
 - **[mirrortest](https://github.com/juanlumc1988/mirrortest)** generates test
   and class stubs for GoogleTest and Qt Test. This project's tests use
   doctest, so the tool itself does not apply. Two things carry over: its
