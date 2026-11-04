@@ -6,9 +6,10 @@ Infer undocumented bus protocols from captures. The command it builds is
 `bitwise`.
 
 **Status: early.** The CRC identification stage works end to end and is
-covered by tests. The rest of the pipeline — frame segmentation, field
-discovery, field typing — is designed and not written. See
-[What this does not do yet](#what-this-does-not-do-yet).
+covered by tests; the first release, 0.1.0, ships it. The rest of the
+pipeline — frame segmentation, field discovery, field typing — is designed and
+not written. See [What this does not do yet](#what-this-does-not-do-yet) and
+the [roadmap](docs/roadmap.md).
 
 ## The problem
 
@@ -179,8 +180,8 @@ Each `FILE` is one captured frame, raw bytes.
 
 ## What this does not do yet
 
-The CRC stage is one of four in the intended pipeline. The other three are
-designed and unwritten:
+The CRC stage is one stage of a longer pipeline (see the
+[roadmap](docs/roadmap.md)). The others are designed and unwritten:
 
 - **Frame segmentation.** Right now each frame is a separate file, already
   cut. Real captures are a byte stream; inter-byte gap timing gives the
@@ -202,16 +203,36 @@ designed and unwritten:
   parameter space — which has a neat shortcut, since for a fixed width and
   reflection the polynomial can be recovered algebraically from a few frames
   differing in one byte, rather than brute-forced.
-- **No GUI.** A Wireshark-style view with fields coloured by inferred type is
-  the eventual Qt layer.
+- **No GUI.** The output is meant for tools that already exist — Kaitai
+  Struct, a Wireshark dissector, DBC — and those come first. A Qt view with
+  fields coloured by inferred type comes after.
 
 ## Roadmap
 
-1. Uncatalogued polynomial recovery — the algebraic shortcut above.
-2. Frame segmentation from a raw byte stream with timing.
-3. Field discovery by entropy, and field typing.
-4. Generated output: a C++ header or a Kaitai Struct definition.
-5. Qt view over a capture.
+There are two tracks. The detail, including what "done" means for each stage
+and the synthetic protocols each one is tested against, is in
+[docs/roadmap.md](docs/roadmap.md).
+
+**The pipeline.** Built first as a thin slice that goes all the way through (a
+Modbus RTU capture in, a Kaitai Struct definition out) and then deepened one
+stage at a time, each measured against synthetic captures with a known answer:
+
+1. Capture model and importers, a synthetic-protocol corpus, and an
+   evaluation harness.
+2. Checksums beyond the catalogued CRCs: sums, XOR, Fletcher, hidden seeds,
+   checksums written as ASCII hex, uncatalogued polynomials.
+3. Frame segmentation: idle gaps, delimiters, byte stuffing, and segmentation
+   guided by a checksum or a length field.
+4. Field discovery: message types first, then entropy per type.
+5. Field typing: constants, enums, counters, timestamps, lengths, floats, text,
+   flags; request/response correlation.
+6. Export: Kaitai Struct, a Wireshark Lua dissector, DBC, a C++ header — each
+   checked by re-parsing the original capture.
+
+**Independent features,** each built and finished on its own once the
+pipeline exists: stimulus labelling, session state machines, live capture and
+UART parameter detection, bit-level framing (raw CAN, bit stuffing), Python
+bindings, interop with rewind-mcu, and a Qt viewer.
 
 ## Relationship to rewind-mcu
 
@@ -222,6 +243,11 @@ wire. They are deliberately *not* sharing a library: the obvious common
 ground turns out to be about four hundred lines of trivia, and the two CRC
 implementations want opposite things — one fixed algorithm optimised for
 flash size there, any algorithm with parameters as data here.
+
+Where they can meet is data, not code: the bytes a firmware read from a UART
+in a `rewind` trace are a capture, with cycle-accurate timing. A neutral
+capture format, the first stage of the [roadmap](docs/roadmap.md), is where an
+exporter on that side and an importer here would plug in.
 
 If real duplication shows up later, extracting it then will be better
 informed than guessing at the interface now.
