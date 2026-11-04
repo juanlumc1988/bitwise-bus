@@ -74,6 +74,22 @@ value types in `bw_core`, so each is tested alone and `bitwise analyze`
 composes them. Alternatives stay alive between stages, because later stages
 are often what decides: the CRC settles where a frame ends.
 
+### Shape of the public API
+
+A proposal that keeps the Python bindings (B5) cheap, from what bridgefex
+accepted and rejected (see [Related projects](#related-projects-no-shared-code)).
+It applies to the stage APIs from now on; the existing CRC headers are bound
+through a facade instead:
+
+- Public headers use the `<cstdint>` types, not aliases such as `bw::u8`.
+- Result types are plain data: no methods, no raw pointers, no strings, no
+  containers inside them.
+- Collections live in a class that owns them privately and exposes them
+  through accessors; what crosses the boundary is scalars, strings, vectors of
+  scalars and vectors of plain structs.
+- Code that needs more than that goes behind a facade instead of bending the
+  core API.
+
 ## Track A: the pipeline
 
 ### First, a vertical skeleton
@@ -182,7 +198,7 @@ later, and several will lean on code written for Track A.
 | B2 | **Session state machines.** Handshakes and message-type sequences, learned from the capture. |
 | B3 | **Live capture** (SocketCAN, serial) and **UART parameter detection** (baud rate, parity, stop bits) from raw logic-analyser samples. |
 | B4 | **Bit-level framing.** Raw CAN samples, bit stuffing and non-byte-aligned checksum fields: the limitation the README documents. |
-| B5 | **Python bindings**, for notebooks and plotting. Candidate route: [bridgefex](https://github.com/juanlumc1988/bridgefex). See [Related projects](#related-projects-no-shared-code). |
+| B5 | **Python bindings**, for notebooks and plotting, through [bridgefex](https://github.com/juanlumc1988/bridgefex) and a facade of handles and accessors. Tried and working on Linux for the CRC stage; see [Related projects](#related-projects-no-shared-code). |
 | B6 | **rewind-mcu interop**, through a neutral capture format. See below. |
 | B7 | **Qt viewer**, with fields coloured by inferred type. A separate target behind an option: `bw_core` stays free of Qt. |
 
@@ -221,33 +237,77 @@ the reason the README gives for `rewind-mcu`.
   format**, defined in stage 1: an exporter on the `rewind` side and an importer
   here, with no shared code.
 - **[bridgefex](https://github.com/juanlumc1988/bridgefex)** generates a pure C
-  layer and Python bindings from C++ headers. It was run on the `bw_core`
-  headers of 0.1.0 (bridgefex 0.1.0, libclang 20.1.2, Python 3.13) and
-  **rejects them**. It is all-or-nothing, so it generated nothing, and it
-  reported 28 errors:
-  - 15 type aliases: `bw::u8`, `u16`, `u32`, `u64`;
-  - 7 methods on value structs: `Layout` (5) and `SearchReport` (2);
-  - 4 raw pointers: the `data` parameter of `crc_compute`, the results of
-    `catalog()` and `catalog_find()`, and `Candidate::spec`;
-  - 1 string member: `CrcSpec::name`, a `const char*`;
-  - 1 container inside a value struct: `SearchReport::candidates`.
+  layer and Python bindings from C++ headers. It was tried against `bw_core`
+  0.1.0 (bridgefex at `f18687b`, libclang 20.1.2, Python 3.13), in three steps.
 
-  Run again on a copy with the aliases replaced by the `<cstdint>` types they
-  stand for, 14 errors remain: the 13 above that are not aliases, plus the
-  `std::vector` inside `Frame`, which an alias error had been hiding. So the
-  aliases are cheap to avoid in new public headers, and everything else means
-  `bw_core` would be bound through a thin facade of opaque handles and
-  accessors, not directly. The shapes a facade can use (plain value structs,
-  `std::vector` of scalars and value structs as parameters and results, opaque
-  handles) come from bridgefex's README and have not been tried. To repeat the
-  run, from a directory holding `include/bw/`:
+  1. **The headers as they are are rejected.** It is all-or-nothing, so it
+     generated nothing, and it reported 28 errors:
+     - 15 type aliases: `bw::u8`, `u16`, `u32`, `u64`;
+     - 7 methods on value structs: `Layout` (5) and `SearchReport` (2);
+     - 4 raw pointers: the `data` parameter of `crc_compute`, the results of
+       `catalog()` and `catalog_find()`, and `Candidate::spec`;
+     - 1 string member: `CrcSpec::name`, a `const char*`;
+     - 1 container inside a value struct: `SearchReport::candidates`.
+
+     With the aliases replaced by the `<cstdint>` types they stand for, 14
+     errors remain: the 13 above that are not aliases, plus the `std::vector`
+     inside `Frame`, which an alias error had been hiding. The count and the
+     text of the errors are identical before and after bridgefex gained its
+     Python directors, which did not touch the supported subset.
+  2. **A facade of handles and accessors is accepted.** This shape, a class
+     that owns the frames and the report privately and exposes them through
+     accessors, generated 11 files:
+
+     ```cpp
+     // abridged: the constructor and the includes are left out
+     struct Match {                       // plain value struct: scalars only
+         std::uint32_t header_skip;
+         std::uint32_t trailer_skip;
+         std::uint32_t width;
+         bool          big_endian;
+     };
+     class Search {
+     public:
+         void add_frame(const std::vector<std::uint8_t>& bytes);
+         void run();
+         std::size_t         candidate_count() const;
+         std::string         candidate_name(std::size_t index) const;
+         Match               candidate_layout(std::size_t index) const;
+         std::vector<Match>  layouts() const;
+         std::uint32_t       evidence_bits() const;
+         bool                confident() const;
+     private:
+         std::vector<bw::Frame> frames_;  // types bridgefex does not wrap are fine here
+         bw::SearchReport       report_;
+     };
+     ```
+
+     The generated C layer, built with the facade and the `bw_core` sources
+     into a shared library (`g++ -std=c++17 -fPIC -fvisibility=hidden -Wall
+     -Wextra`), compiles without warnings and exports the 16 C functions and
+     no `bw::` or `bwf::` symbol.
+  3. **It works from Python,** checked end to end against the `bitwise` CLI,
+     which is the direct C++ path, on the same frames. Given two real Modbus
+     RTU requests, the bindings report CRC-16/MODBUS with header 0, trailer 0,
+     16 bits, little-endian, with the same candidates, the same evidence (32
+     bits) and the same verdict as the CLI. A corrupted CRC byte and random
+     bytes give no candidate, as in the CLI. A C++ exception (`.at()` out of
+     range) arrives as `bwf.Error`. 300 create/destroy cycles complete. The
+     same 11 checks pass with the library built with ASan and UBSan and no
+     finding (leak detection off, because the interpreter leaks by design;
+     libstdc++ has to be preloaded, because Python does not link it).
+
+  Not tried: any platform other than Linux x86-64, threads, callbacks and
+  directors, large captures, Python versions other than 3.13. To repeat the
+  first step, from a directory holding `include/bw/`:
 
   ```console
   bridgefex --module bw --output out --std c++17 -I include --include-root include \
       include/bw/types.h include/bw/crc.h include/bw/catalog.h include/bw/crc_search.h
   ```
 
-  If a gap shows up when binding, it is also feedback for bridgefex.
+  A gap found when binding is also feedback for bridgefex.
+
 - **[mirrortest](https://github.com/juanlumc1988/mirrortest)** generates test
   and class stubs for GoogleTest and Qt Test. This project's tests use
   doctest, so the tool itself does not apply. Two things carry over: its
