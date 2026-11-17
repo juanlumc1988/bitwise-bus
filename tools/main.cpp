@@ -3,13 +3,16 @@
 //
 //   bitwise crc-catalog         list the algorithms that will be tried
 //   bitwise crc-find FILE...    work out which one a set of frames uses
+//   bitwise capture-info FILE   a first look at a capture file
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
 
+#include "bw/capture.h"
 #include "bw/crc_search.h"
 
 namespace {
@@ -21,6 +24,7 @@ int usage() {
         "usage:\n"
         "  bitwise crc-catalog\n"
         "  bitwise crc-find FILE [FILE...] [--header-skip N] [--trailer-skip N]\n"
+        "  bitwise capture-info FILE\n"
         "\n"
         "Each FILE is one captured frame, raw bytes. Give it as many frames\n"
         "as you have: a single narrow checksum proves nothing, and the tool\n"
@@ -42,6 +46,91 @@ bool read_frame(const char* path, bw::Frame* out) {
     const bool bad = std::ferror(f) != 0;
     std::fclose(f);
     return !bad;
+}
+
+bool read_text_file(const char* path, std::string* out) {
+    std::FILE* f = std::fopen(path, "rb");
+    if (f == nullptr) {
+        return false;
+    }
+    char        chunk[4096];
+    std::size_t n;
+    while ((n = std::fread(chunk, 1, sizeof(chunk), f)) > 0) {
+        out->append(chunk, n);
+    }
+    const bool bad = std::ferror(f) != 0;
+    std::fclose(f);
+    return !bad;
+}
+
+unsigned long long ull(std::uint64_t v) { return static_cast<unsigned long long>(v); }
+long long          sll(std::int64_t v)  { return static_cast<long long>(v); }
+
+int cmd_capture_info(const std::vector<std::string>& paths) {
+    if (paths.size() != 1) {
+        std::fprintf(stderr, "bitwise: capture-info takes exactly one file\n");
+        return 2;
+    }
+    std::string text;
+    if (!read_text_file(paths[0].c_str(), &text)) {
+        std::fprintf(stderr, "bitwise: cannot read %s\n", paths[0].c_str());
+        return 1;
+    }
+    bw::Capture capture;
+    try {
+        capture = bw::parse_capture_csv(text);
+    } catch (const bw::CaptureError& e) {
+        std::fprintf(stderr, "bitwise: %s: %s\n", paths[0].c_str(), e.what());
+        return 1;
+    }
+
+    const bw::CaptureStats stats = bw::capture_stats(capture);
+    std::printf("%-10s %llu (%llu bytes)\n", "events", ull(stats.events), ull(stats.bytes));
+
+    std::vector<std::uint64_t> per_channel(capture.channel_count(), 0);
+    std::uint64_t              rx = 0, tx = 0, unknown = 0;
+    for (std::size_t i = 0; i < capture.event_count(); ++i) {
+        const bw::EventInfo info = capture.event(i);
+        ++per_channel[info.channel];
+        if (info.direction == bw::Direction::Rx)      ++rx;
+        else if (info.direction == bw::Direction::Tx) ++tx;
+        else                                          ++unknown;
+    }
+    std::string channels;
+    std::size_t listed = 0;
+    for (std::size_t c = 0; c < per_channel.size(); ++c) {
+        if (per_channel[c] == 0) {
+            continue;                 // the unnamed channel, when nothing is on it
+        }
+        const std::string name = capture.channel_name(static_cast<std::uint32_t>(c));
+        channels += (listed++ ? ", " : "") + (name.empty() ? std::string("(unnamed)") : name) +
+                    " (" + std::to_string(per_channel[c]) + ")";
+    }
+    if (listed == 0) {
+        std::printf("%-10s none\n", "channels");
+    } else {
+        std::printf("%-10s %zu: %s\n", "channels", listed, channels.c_str());
+    }
+    std::printf("%-10s rx %llu, tx %llu, unknown %llu\n", "direction", ull(rx), ull(tx),
+                ull(unknown));
+
+    if (stats.timed_events == 0) {
+        std::printf("%-10s none: no event has a timestamp\n", "time");
+    } else {
+        if (stats.timed_events < stats.events) {
+            std::printf("%-10s %llu of %llu events have a timestamp\n", "time",
+                        ull(stats.timed_events), ull(stats.events));
+        }
+        std::printf("%-10s first %lld ns, last %lld ns\n",
+                    stats.timed_events < stats.events ? "" : "time",
+                    sll(stats.first_time_ns), sll(stats.last_time_ns));
+    }
+    if (stats.interval_count > 0) {
+        std::printf("%-10s %llu between timed events: min %llu ns, median %llu ns, max %llu ns\n",
+                    "intervals", ull(stats.interval_count), ull(stats.min_interval_ns),
+                    ull(stats.median_interval_ns), ull(stats.max_interval_ns));
+    }
+    return 0;
 }
 
 int cmd_catalog() {
@@ -141,6 +230,13 @@ int main(int argc, char** argv) {
     }
     if (command == "crc-catalog") {
         return cmd_catalog();
+    }
+    if (command == "capture-info") {
+        std::vector<std::string> args;
+        for (int i = 2; i < argc; ++i) {
+            args.push_back(argv[i]);
+        }
+        return cmd_capture_info(args);
     }
     if (command != "crc-find") {
         std::fprintf(stderr, "bitwise: unknown command '%s'\n", command.c_str());

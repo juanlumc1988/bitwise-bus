@@ -209,11 +209,14 @@ later, and several will lean on code written for Track A.
   files. `main` stays green and releasable after every merge. A stage stays
   behind its interface until it is wired in, so unfinished work never reaches
   the command line.
-- **The skeleton is three pull requests,** along its seams:
-  1. the capture model, importers, model type, generators and evaluation
-     harness: the test infrastructure;
-  2. the skeleton stages and `bitwise analyze`;
-  3. the Kaitai exporter, round-trip checking, a README demo and a release.
+- **The skeleton is four pull requests,** along its seams. It was three until
+  the size limit above said otherwise:
+  1. the capture model and its file format (done: see
+     [capture-format.md](capture-format.md));
+  2. the model type, the protocol registry, the first generators and the
+     evaluation harness: the rest of the test infrastructure;
+  3. the skeleton stages and `bitwise analyze`;
+  4. the Kaitai exporter, round-trip checking, a README demo and a release.
 - **Deepening** is one pull request per stage per wave of protocols, each with
   its corpus additions and the new metrics baseline. **Track B** is one pull
   request per feature, or a short series for the large ones.
@@ -333,8 +336,9 @@ learn where they failed, so the corpus can contain those cases.
 
 ## Open questions
 
-- The neutral capture format: columns, units, how direction and channel are
-  written.
+The neutral capture format is no longer one: it is specified in
+[capture-format.md](capture-format.md).
+
 - How evidence is represented across stages: bits, probabilities, or both.
 - How alternatives are carried between stages without the cost exploding.
 - Whether a model has its own serialisation, for storing an inference and

@@ -174,9 +174,14 @@ bitwise crc-find FILE [FILE...]     work out which one a set of frames uses
                                     the covered range (default 4)
     --trailer-skip N                how many bytes may follow the checksum
                                     (default 2)
+bitwise capture-info FILE           a first look at a capture file: events,
+                                    channels, directions, timing
 ```
 
-Each `FILE` is one captured frame, raw bytes.
+For `crc-find`, each `FILE` is one captured frame, raw bytes. `capture-info`
+reads the capture format described in
+[docs/capture-format.md](docs/capture-format.md): a plain CSV with one row per
+event, which is what the later stages of the pipeline will read.
 
 ## What this does not do yet
 
