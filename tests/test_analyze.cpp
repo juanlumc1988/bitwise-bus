@@ -207,10 +207,13 @@ namespace {
 std::vector<Bytes> family(fixtures::Random* rng, std::size_t n, std::size_t size, std::uint8_t lead) {
     std::vector<Bytes> out;
     for (std::size_t i = 0; i < n; ++i) {
-        Bytes f(1, lead);
-        f.push_back(static_cast<std::uint8_t>(1 + i % 3));
-        while (f.size() < size) {
-            f.push_back(rng->byte());
+        // Written by index: a vector of one element that is then pushed to is what
+        // gcc 15 reports at -O2 as an array subscript outside its bounds, wrongly.
+        Bytes f(size);
+        f[0] = lead;
+        f[1] = static_cast<std::uint8_t>(1 + i % 3);
+        for (std::size_t k = 2; k < size; ++k) {
+            f[k] = rng->byte();
         }
         out.push_back(f);
     }
