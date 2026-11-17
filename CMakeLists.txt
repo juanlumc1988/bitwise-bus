@@ -160,4 +160,7 @@ if(BW_BUILD_TESTS)
     add_test(NAME cli_synth_bad_number COMMAND bitwise synth modbus-rtu --frames 100001)
     set_tests_properties(cli_synth_bad_number PROPERTIES PASS_REGULAR_EXPRESSION
         "--frames: '100001' is not a whole number from 0 to 100000")
+    add_test(NAME cli_synth_missing_value COMMAND bitwise synth modbus-rtu --frames)
+    set_tests_properties(cli_synth_missing_value PROPERTIES PASS_REGULAR_EXPRESSION
+        "--frames needs a value")
 endif()

@@ -188,6 +188,10 @@ int cmd_synth(const std::vector<std::string>& args) {
         const std::string&  arg       = args[i];
         const bool          has_value = (i + 1 < args.size());
         std::uint64_t       number    = 0;
+        if ((arg == "--seed" || arg == "--frames" || arg == "--jitter-permille") && !has_value) {
+            std::fprintf(stderr, "bitwise: %s needs a value\n", arg.c_str());
+            return 2;
+        }
         if (arg == "--seed" && has_value) {
             if (!parse_unsigned(args[++i], ~std::uint64_t(0), &number)) {
                 std::fprintf(stderr, "bitwise: --seed: '%s' is not a whole number\n", args[i].c_str());
