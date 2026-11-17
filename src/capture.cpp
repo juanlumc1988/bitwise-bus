@@ -50,8 +50,13 @@ void Capture::add_event(const EventInfo& info,
 
     // The only steps that can run out of memory come first. If either throws,
     // nothing has changed; the push_back below needs no new storage, so it
-    // cannot throw, and no bytes are ever left that no event owns.
-    records_.reserve(records_.size() + 1);
+    // cannot throw, and no bytes are ever left that no event owns. The room is
+    // made by doubling: reserving one more than there is would copy every
+    // event already stored each time, and building a capture would take time
+    // proportional to the square of its size.
+    if (records_.size() == records_.capacity()) {
+        records_.reserve(records_.capacity() == 0 ? 16 : records_.capacity() * 2);
+    }
     bytes_.insert(bytes_.end(), bytes.begin(), bytes.end());
     Record record;
     record.info = stored;

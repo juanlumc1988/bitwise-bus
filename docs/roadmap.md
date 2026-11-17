@@ -216,7 +216,8 @@ later, and several will lean on code written for Track A.
      [capture-format.md](capture-format.md));
   2. the model type and the evaluation harness (done: `bw/model.h` and
      `bw/evaluate.h`);
-  3. the protocol registry, the Modbus RTU generator and `bitwise synth`;
+  3. the protocol registry, the Modbus RTU generator and `bitwise synth` (done:
+     `bw/protocol.h` and `bw/dataset.h`);
   4. the skeleton stages and `bitwise analyze`;
   5. the Kaitai exporter, round-trip checking, a README demo and a release.
 - **Deepening** is one pull request per stage per wave of protocols, each with

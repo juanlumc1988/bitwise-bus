@@ -176,12 +176,34 @@ bitwise crc-find FILE [FILE...]     work out which one a set of frames uses
                                     (default 2)
 bitwise capture-info FILE           a first look at a capture file: events,
                                     channels, directions, timing
+bitwise protocols [NAME]            the known protocols, or the model of one
+bitwise synth NAME                  a synthetic capture of a known protocol,
+                                    as a capture file, on standard output
+    --seed N                        the same seed gives the same capture on
+                                    every platform (default 1)
+    --frames N                      how many frames, 0 to 100000 (default 20)
+    --jitter-permille N             timing noise, 0 to 500 (default 0)
 ```
 
 For `crc-find`, each `FILE` is one captured frame, raw bytes. `capture-info`
 reads the capture format described in
 [docs/capture-format.md](docs/capture-format.md): a plain CSV with one row per
 event, which is what the later stages of the pipeline will read.
+
+`synth` needs no hardware: it writes a capture of a protocol the project knows,
+with a known answer, which is also what the tests of every stage are scored
+against.
+
+```console
+$ bitwise protocols
+modbus-rtu   Modbus RTU requests for functions 3 and 4, 9600 baud 8N1, one event per byte
+$ bitwise synth modbus-rtu --seed 1 --frames 3 | head -5
+# bitwise-capture 1
+time_ns,channel,direction,id,data
+0,rs485,,,03
+1145833,rs485,,,04
+2291666,rs485,,,55
+```
 
 ## What this does not do yet
 

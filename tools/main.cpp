@@ -4,16 +4,20 @@
 //   bitwise crc-catalog         list the algorithms that will be tried
 //   bitwise crc-find FILE...    work out which one a set of frames uses
 //   bitwise capture-info FILE   a first look at a capture file
+//   bitwise protocols [NAME]    the known protocols, or the model of one
+//   bitwise synth NAME          a synthetic capture of a known protocol
 
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "bw/capture.h"
 #include "bw/crc_search.h"
+#include "bw/protocol.h"
 
 namespace {
 
@@ -25,6 +29,8 @@ int usage() {
         "  bitwise crc-catalog\n"
         "  bitwise crc-find FILE [FILE...] [--header-skip N] [--trailer-skip N]\n"
         "  bitwise capture-info FILE\n"
+        "  bitwise protocols [NAME]\n"
+        "  bitwise synth NAME [--seed N] [--frames N] [--jitter-permille N]\n"
         "\n"
         "Each FILE is one captured frame, raw bytes. Give it as many frames\n"
         "as you have: a single narrow checksum proves nothing, and the tool\n"
@@ -133,6 +139,103 @@ int cmd_capture_info(const std::vector<std::string>& paths) {
     return 0;
 }
 
+// A whole number, digits only, from 0 to `max`.
+bool parse_unsigned(const std::string& text, std::uint64_t max, std::uint64_t* out) {
+    if (text.empty()) {
+        return false;
+    }
+    std::uint64_t value = 0;
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        if (text[i] < '0' || text[i] > '9') {
+            return false;
+        }
+        const std::uint64_t digit = static_cast<std::uint64_t>(text[i] - '0');
+        if (value > (max - digit) / 10) {
+            return false;
+        }
+        value = value * 10 + digit;
+    }
+    *out = value;
+    return true;
+}
+
+int cmd_protocols(const std::vector<std::string>& args) {
+    if (args.size() > 1) {
+        std::fprintf(stderr, "bitwise: protocols takes at most one name\n");
+        return 2;
+    }
+    try {
+        if (args.empty()) {
+            const std::vector<std::string> names = bw::protocol_names();
+            for (std::size_t i = 0; i < names.size(); ++i) {
+                std::printf("%-12s %s\n", names[i].c_str(), bw::protocol_summary(names[i]).c_str());
+            }
+            return 0;
+        }
+        std::printf("%s\n\n%s", bw::protocol_summary(args[0]).c_str(),
+                    bw::describe_model(bw::protocol_model(args[0])).c_str());
+        return 0;
+    } catch (const std::invalid_argument& e) {
+        std::fprintf(stderr, "bitwise: %s\n", e.what());
+        return 1;
+    }
+}
+
+int cmd_synth(const std::vector<std::string>& args) {
+    std::string       name;
+    bw::GenerateOptions options;
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        const std::string&  arg       = args[i];
+        const bool          has_value = (i + 1 < args.size());
+        std::uint64_t       number    = 0;
+        if ((arg == "--seed" || arg == "--frames" || arg == "--jitter-permille") && !has_value) {
+            std::fprintf(stderr, "bitwise: %s needs a value\n", arg.c_str());
+            return 2;
+        }
+        if (arg == "--seed" && has_value) {
+            if (!parse_unsigned(args[++i], ~std::uint64_t(0), &number)) {
+                std::fprintf(stderr, "bitwise: --seed: '%s' is not a whole number\n", args[i].c_str());
+                return 2;
+            }
+            options.seed = number;
+        } else if (arg == "--frames" && has_value) {
+            if (!parse_unsigned(args[++i], 100000, &number)) {
+                std::fprintf(stderr, "bitwise: --frames: '%s' is not a whole number from 0 to 100000\n",
+                             args[i].c_str());
+                return 2;
+            }
+            options.frames = static_cast<std::uint32_t>(number);
+        } else if (arg == "--jitter-permille" && has_value) {
+            if (!parse_unsigned(args[++i], 500, &number)) {
+                std::fprintf(stderr, "bitwise: --jitter-permille: '%s' is not a whole number from 0 to 500\n",
+                             args[i].c_str());
+                return 2;
+            }
+            options.jitter_permille = static_cast<std::uint32_t>(number);
+        } else if (!arg.empty() && arg[0] == '-') {
+            std::fprintf(stderr, "bitwise: unknown option '%s'\n", arg.c_str());
+            return 2;
+        } else if (name.empty()) {
+            name = arg;
+        } else {
+            std::fprintf(stderr, "bitwise: synth takes one protocol name\n");
+            return 2;
+        }
+    }
+    if (name.empty()) {
+        std::fprintf(stderr, "bitwise: synth needs a protocol name; try 'bitwise protocols'\n");
+        return 2;
+    }
+    try {
+        const std::string text = bw::format_capture_csv(bw::generate_protocol(name, options).capture());
+        std::fwrite(text.data(), 1, text.size(), stdout);
+        return 0;
+    } catch (const std::invalid_argument& e) {
+        std::fprintf(stderr, "bitwise: %s\n", e.what());
+        return 1;
+    }
+}
+
 int cmd_catalog() {
     std::printf("%-20s %6s  %-18s %-18s %-5s %-6s %s\n",
                 "name", "width", "poly", "init", "refin", "refout", "xorout");
@@ -230,6 +333,13 @@ int main(int argc, char** argv) {
     }
     if (command == "crc-catalog") {
         return cmd_catalog();
+    }
+    if (command == "protocols" || command == "synth") {
+        std::vector<std::string> args;
+        for (int i = 2; i < argc; ++i) {
+            args.push_back(argv[i]);
+        }
+        return command == "protocols" ? cmd_protocols(args) : cmd_synth(args);
     }
     if (command == "capture-info") {
         std::vector<std::string> args;

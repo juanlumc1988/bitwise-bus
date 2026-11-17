@@ -1,0 +1,5 @@
+# The checked-in captures are compared byte for byte with what the generator
+# writes (tests/test_protocol.cpp), and the generator writes LF. Git for Windows
+# may check text files out as CRLF; without this, the comparison fails there
+# with two pages that look the same.
+tests/corpus/*.csv text eol=lf
