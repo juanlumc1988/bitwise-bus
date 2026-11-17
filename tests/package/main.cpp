@@ -4,16 +4,18 @@
 // Link check for the installed package: two real Modbus RTU requests go in,
 // CRC-16/MODBUS, whole frame, little-endian has to come out. A one-line capture
 // is read as well, a model is built and scored, a synthetic capture is made and analysed, so that
-// the capture, model, evaluation, protocol and pipeline headers are checked as C++11 and linked.
+// the capture, model, evaluation, protocol, pipeline and exporter headers are checked as C++11 and linked.
 
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include "bw/analyze.h"
 #include "bw/capture.h"
 #include "bw/crc_search.h"
 #include "bw/evaluate.h"
+#include "bw/kaitai.h"
 #include "bw/model.h"
 #include "bw/protocol.h"
 
@@ -60,6 +62,13 @@ int main() {
     if (analysis.type_count() != 1 ||
         analysis.model().field_detail(0, analysis.model().field_count(0) - 1) != "CRC-16/MODBUS") {
         std::fprintf(stderr, "the packaged pipeline found the wrong model\n");
+        return 1;
+    }
+
+    // ...and a Kaitai definition of it is written.
+    if (bw::export_kaitai(analysis.model(), 0, "type0").find("  - id: checksum\n    type: u2le\n") ==
+        std::string::npos) {
+        std::fprintf(stderr, "the packaged exporter wrote the wrong definition\n");
         return 1;
     }
 

@@ -2,7 +2,7 @@
 # Part of bitwise-bus -- inferring undocumented bus protocols from captures.
 
 cmake_minimum_required(VERSION 3.16)
-project(bitwise-bus VERSION 0.1.0 LANGUAGES CXX)
+project(bitwise-bus VERSION 0.2.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -55,7 +55,8 @@ add_library(bw_core STATIC
     src/segmentation.cpp
     src/checksum.cpp
     src/fields.cpp
-    src/analyze.cpp)
+    src/analyze.cpp
+    src/kaitai.cpp)
 add_library(bw::core ALIAS bw_core)
 set_target_properties(bw_core PROPERTIES EXPORT_NAME core)
 target_include_directories(bw_core PUBLIC
@@ -134,10 +135,12 @@ if(BW_BUILD_TESTS)
         tests/test_segmentation.cpp
         tests/test_checksum.cpp
         tests/test_fields.cpp
-        tests/test_analyze.cpp)
+        tests/test_analyze.cpp
+        tests/test_kaitai.cpp)
     target_include_directories(bw_tests PRIVATE tests/third_party)
     target_compile_definitions(bw_tests PRIVATE
-        "BW_CORPUS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus\"")
+        "BW_CORPUS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus\""
+        "BW_ROUNDTRIP_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/roundtrip\"")
     target_link_libraries(bw_tests PRIVATE bw_core)
     bw_configure(bw_tests)
 
@@ -196,6 +199,31 @@ if(BW_BUILD_TESTS)
         COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/modbus_rtu_two_requests.csv --min-frames 0)
     set_tests_properties(cli_analyze_bad_number PROPERTIES PASS_REGULAR_EXPRESSION
         "--min-frames: '0' is not a whole number from 1 to 1000000")
+    set(BW_CORPUS_50 ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_modbus_rtu_seed1_50frames_jitter300.csv)
+    add_test(NAME cli_export COMMAND bitwise export ${BW_CORPUS_50})
+    set_tests_properties(cli_export PROPERTIES PASS_REGULAR_EXPRESSION
+        "meta:.*id: type0.*seq:.*id: field_0.*type: u1.*id: field_4.*contents: \\[0x00\\].*id: checksum.*type: u2le")
+    add_test(NAME cli_export_id COMMAND bitwise export ${BW_CORPUS_50} --format kaitai --type 0 --id modbus_request)
+    set_tests_properties(cli_export_id PROPERTIES PASS_REGULAR_EXPRESSION "id: modbus_request")
+    add_test(NAME cli_export_bad_id COMMAND bitwise export ${BW_CORPUS_50} --id Bad)
+    set_tests_properties(cli_export_bad_id PROPERTIES PASS_REGULAR_EXPRESSION
+        "'Bad' is not a Kaitai identifier")
+    add_test(NAME cli_export_bad_format COMMAND bitwise export ${BW_CORPUS_50} --format wireshark)
+    set_tests_properties(cli_export_bad_format PROPERTIES PASS_REGULAR_EXPRESSION
+        "unknown format 'wireshark'; known: kaitai")
+    add_test(NAME cli_export_bad_type COMMAND bitwise export ${BW_CORPUS_50} --type 3)
+    set_tests_properties(cli_export_bad_type PROPERTIES PASS_REGULAR_EXPRESSION
+        "--type 3: the analysis found 1 message type")
+    add_test(NAME cli_export_nothing
+        COMMAND bitwise export ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/modbus_rtu_two_requests.csv)
+    set_tests_properties(cli_export_nothing PROPERTIES PASS_REGULAR_EXPRESSION
+        "nothing to export: the analysis of .* found no message type")
+    add_test(NAME cli_export_no_file COMMAND bitwise export)
+    set_tests_properties(cli_export_no_file PROPERTIES PASS_REGULAR_EXPRESSION
+        "export takes exactly one file")
+    add_test(NAME cli_export_missing_value COMMAND bitwise export ${BW_CORPUS_50} --id)
+    set_tests_properties(cli_export_missing_value PROPERTIES PASS_REGULAR_EXPRESSION
+        "--id needs a value")
     add_test(NAME cli_analyze_missing_value
         COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/modbus_rtu_two_requests.csv --min-gap-ratio)
     set_tests_properties(cli_analyze_missing_value PROPERTIES PASS_REGULAR_EXPRESSION

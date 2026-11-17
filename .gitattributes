@@ -3,3 +3,4 @@
 # may check text files out as CRLF; without this, the comparison fails there
 # with two pages that look the same.
 tests/corpus/*.csv text eol=lf
+tests/roundtrip/*.ksy text eol=lf

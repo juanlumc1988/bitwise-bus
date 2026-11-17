@@ -1,9 +1,10 @@
 # Roadmap
 
 This is a plan, not a record of what exists. What works today is in the
-[README](../README.md): the CRC identification stage, end to end. Everything
-below is intended and unwritten, and the order is a proposal that the first
-results are allowed to change.
+[README](../README.md): the skeleton of the pipeline, end to end, on synthetic
+Modbus RTU captures. What is described below beyond it is intended and
+unwritten, and the order is a proposal that the first results are allowed to
+change.
 
 ## Scope and principles
 
@@ -128,13 +129,29 @@ not a family of them.
 framing, the checksum and the field boundaries of the generator's model, and
 the exported definition parses the capture back into the same bytes.
 
-The first half is met (`tests/test_analyze.cpp`): on 100 captures of 50 frames
+Both halves are met. The first (`tests/test_analyze.cpp`): on 100 captures of 50 frames
 (25 seeds, four levels of timing noise up to the generator's maximum), every
 frame is found exactly, every boundary of the true model is found, and the
 checksum matches in position, size, byte order, coverage and algorithm. The
 found model has one boundary more than the truth: the high byte of the quantity
 is always 0, so it is a constant of its own, and nothing in a capture says it
 belongs with the byte after it. That is the baseline stage 4 starts from.
+
+The second (`tests/roundtrip/kaitai_roundtrip.py`) is checked with the real Kaitai
+tools, not with an interpreter of ours. For nine synthetic Modbus RTU captures (three
+seeds, three noise levels) of 50 frames, `bitwise export` writes the definition, the
+official compiler (the JavaScript build, 0.11) accepts it and makes a Python parser,
+and the parser reads each of the 450 frames, uses all of it, and gives back the frame's
+bytes. Reading back alone cannot tell a wrong byte order from a right one, since a
+number read one way is written the same way, so the script also checks that what the
+parser reads as the checksum is the CRC-16/MODBUS of the frame, worked out in the
+script. A second capture with constant bytes before and after the CRC checks that the
+constants are `contents` and that the parser refuses a frame where they are wrong, and
+a third definition, checked in and compared with the exporter's output by the unit
+tests, holds every kind of field the exporter writes (all the integer and float widths
+and byte orders, text, bytes, constants of several bytes in both orders) and is read
+with expected values. The script is a job of the CI workflow, with the compiler and
+the runtime at fixed versions.
 
 ### Then, stage by stage
 
@@ -237,7 +254,8 @@ later, and several will lean on code written for Track A.
      `bw/protocol.h` and `bw/dataset.h`);
   4. the skeleton stages and `bitwise analyze` (done: `bw/segmentation.h`,
      `bw/checksum.h`, `bw/fields.h` and `bw/analyze.h`);
-  5. the Kaitai exporter, round-trip checking, a README demo and a release.
+  5. the Kaitai exporter, round-trip checking, a README demo and a release
+     (done: `bw/kaitai.h` and `tests/roundtrip/`; the release is 0.2.0).
 - **Deepening** is one pull request per stage per wave of protocols, each with
   its corpus additions and the new metrics baseline. **Track B** is one pull
   request per feature, or a short series for the large ones.
@@ -333,12 +351,12 @@ the reason the README gives for `rewind-mcu`.
     file, `bindings/annotations.toml`, says who owns it: it is borrowed.
 
   With those, bridgefex accepts `capture.h`, `model.h`, `evaluate.h`,
-  `dataset.h`, `protocol.h`, `segmentation.h`, `checksum.h`, `fields.h` and
-  `analyze.h` as they are, together (a header that uses a class of another is
-  refused when given alone) and generates 42 files. The shared library built
+  `dataset.h`, `protocol.h`, `segmentation.h`, `checksum.h`, `fields.h`,
+  `analyze.h` and `kaitai.h` as they are, together (a header that uses a class
+  of another is refused when given alone) and generates 45 files. The shared library built
   from them and `bw_core` works from Python: a synthetic Modbus RTU capture
   generated and analysed there gives a report byte for byte the one `bitwise
-  analyze` prints, `find_protocol` returns the borrowed protocol, and an
+  analyze` prints, its Kaitai definition is the one `bitwise export` writes, `find_protocol` returns the borrowed protocol, and an
   unknown protocol name and a malformed capture raise `bw.Error` with the
   library's message. The stage headers were written to the shape rule above,
   and that is what made this work without a facade. Not run on these headers:
@@ -360,7 +378,7 @@ the reason the README gives for `rewind-mcu`.
       --annotations bindings/annotations.toml \
       include/bw/capture.h include/bw/model.h include/bw/evaluate.h include/bw/dataset.h \
       include/bw/protocol.h include/bw/segmentation.h include/bw/checksum.h \
-      include/bw/fields.h include/bw/analyze.h
+      include/bw/fields.h include/bw/analyze.h include/bw/kaitai.h
   ```
 
   A gap found when binding is also feedback for bridgefex.

@@ -5,12 +5,12 @@
 Infer undocumented bus protocols from captures. The command it builds is
 `bitwise`.
 
-**Status: early.** The CRC identification stage works end to end and is
-covered by tests; the first release, 0.1.0, ships it. A first version of every
-other stage now exists too, behind `bitwise analyze`: it cuts a capture into
-frames at the long gaps, finds the checksum, and splits the frames into typed
-fields. It is measured on synthetic Modbus RTU captures only, and it is a
-skeleton to be deepened, not a finished tool: see
+**Status: early.** The whole pipeline now runs end to end on synthetic Modbus
+RTU captures: `bitwise analyze` cuts a capture into frames at the long gaps,
+finds the checksum and splits the frames into typed fields, and `bitwise
+export` writes what it found as a Kaitai Struct definition. Every stage is a
+first version, the simplest thing that can work, to be deepened one at a time;
+and none has met a real capture yet. See
 [What this does not do yet](#what-this-does-not-do-yet) and the
 [roadmap](docs/roadmap.md).
 
@@ -43,6 +43,47 @@ One candidate, comfortably more evidence than chance could produce.
 
 It recovered the algorithm, that the checksum covers the whole frame, and
 that it is stored little-endian — from the bytes alone.
+
+### From a capture to a Kaitai definition
+
+The same pipeline, from a capture file to a definition that the
+[Kaitai Struct](https://kaitai.io/) compiler turns into a parser for most
+languages. Fifty synthetic Modbus RTU requests, one event per byte, with timing
+noise:
+
+```console
+$ bitwise synth modbus-rtu --seed 1 --frames 50 --jitter-permille 300 > capture.csv
+$ bitwise export capture.csv
+meta:
+  id: type0
+doc: "Message type 'type0'. Written by bitwise-bus. Frames are separated by silences of at least 6918373 ns."
+seq:
+  - id: field_0
+    type: u1
+    doc: "enum; evidence 300 bits"
+  - id: field_1
+    type: u1
+    doc: "enum; evidence 350 bits"
+  - id: field_2
+    size: 2
+    doc: "payload"
+  - id: field_4
+    contents: [0x00]
+    doc: "constant; evidence 392 bits"
+  - id: field_5
+    size: 1
+    doc: "payload"
+  - id: checksum
+    type: u2le
+    doc: "checksum, CRC-16/MODBUS, over field_0 to field_5 (Kaitai does not check it); evidence 800 bits"
+```
+
+Nothing but the timing and the bytes went in. The names are positions
+(`field_N`) because nothing in a capture says what a field is called; rename
+them in the file. This is checked against the real Kaitai tools: the compiler
+accepts the definition and the parser it makes reads every frame of the capture
+back into the same bytes, with the checksum it reads equal to the CRC of the
+frame (`tests/roundtrip/`).
 
 ## Why a parametric CRC
 
@@ -122,7 +163,7 @@ To use the library from CMake, point `CMAKE_PREFIX_PATH` at the unpacked
 directory:
 
 ```cmake
-find_package(bitwise-bus 0.1 CONFIG REQUIRED)
+find_package(bitwise-bus 0.2 CONFIG REQUIRED)
 target_link_libraries(my_tool PRIVATE bw::core)
 ```
 
@@ -138,7 +179,7 @@ MSVC).
 - **Linux** binaries are built on Ubuntu 22.04, so the CLI needs glibc 2.35 or
   newer and nothing else. **macOS** needs 11 or newer.
 - Before 1.0 the API can change between minor versions, so
-  `find_package(bitwise-bus 0.1 ...)` accepts 0.1.x only.
+  `find_package(bitwise-bus 0.2 ...)` accepts 0.2.x only.
 
 ## Build and test
 
@@ -192,6 +233,13 @@ bitwise analyze FILE                infer the protocol of a capture file
                                     (default 3)
     --min-frames N                  fewest frames of a size to say anything
                                     about it (default 4)
+bitwise export FILE                 the inferred protocol as a Kaitai Struct
+                                    definition, on standard output
+    --format kaitai                 the only format so far
+    --type N                        which message type, from 0 (default 0)
+    --id NAME                       the name of the type in the definition
+                                    (default: its name in the model)
+    --min-gap-ratio N, --min-frames N   as for analyze
 ```
 
 For `crc-find`, each `FILE` is one captured frame, raw bytes. `capture-info`
@@ -271,6 +319,11 @@ simplest thing that can work, and each is to be deepened (see the
   parameter space — which has a neat shortcut, since for a fixed width and
   reflection the polynomial can be recovered algebraically from a few frames
   differing in one byte, rather than brute-forced.
+- **Only Kaitai Struct is written.** A Wireshark dissector, DBC for CAN and a
+  C++ header are to come, and the Kaitai exporter refuses what it does not
+  write yet (fields that are not a whole number of bytes, or whose size depends
+  on another field) instead of approximating it. It cannot say what a field is
+  called, and what an enumeration's values mean.
 - **No GUI.** The output is meant for tools that already exist — Kaitai
   Struct, a Wireshark dissector, DBC — and those come first. A Qt view with
   fields coloured by inferred type comes after.

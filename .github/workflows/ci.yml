@@ -113,3 +113,36 @@ jobs:
           UBSAN_OPTIONS: print_stacktrace=1
           ASAN_OPTIONS: detect_leaks=1
         run: ./build-san/bw_tests
+
+  # The definitions the exporter writes, compiled by the real Kaitai compiler and
+  # read back with the parser it makes: tests/roundtrip/kaitai_roundtrip.py. The
+  # compiler and the runtime are pinned, so that a new release cannot turn this red.
+  kaitai-roundtrip:
+    name: Kaitai round trip
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the CLI
+        run: |
+          sudo apt-get update && sudo apt-get install -y ninja-build
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBW_BUILD_TESTS=OFF
+          cmake --build build -j
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install the Kaitai compiler and runtime
+        run: |
+          npm install --prefix kaitai --no-audit --no-fund kaitai-struct-compiler@0.11.0
+          python3 -m pip install kaitaistruct==0.11 PyYAML==6.0.3
+
+      - name: Round trip
+        run: |
+          python3 tests/roundtrip/kaitai_roundtrip.py \
+              --bitwise build/bitwise --compiler kaitai/node_modules/kaitai-struct-compiler
