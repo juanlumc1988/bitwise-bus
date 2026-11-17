@@ -3,7 +3,8 @@
 //
 // Link check for the installed package: two real Modbus RTU requests go in,
 // CRC-16/MODBUS, whole frame, little-endian has to come out. A one-line capture
-// is read as well, so the capture header is checked as C++11 and linked.
+// is read as well, and a model is built and scored, so that the capture, model and
+// evaluation headers are checked as C++11 and linked.
 
 #include <cstdio>
 #include <cstring>
@@ -11,6 +12,8 @@
 
 #include "bw/capture.h"
 #include "bw/crc_search.h"
+#include "bw/evaluate.h"
+#include "bw/model.h"
 
 int main() {
     static const bw::u8 a[] = {0x01, 0x03, 0x00, 0x00, 0x00, 0x0A, 0xC5, 0xCD};
@@ -24,6 +27,18 @@ int main() {
     const bw::Capture capture = bw::parse_capture_csv("time_ns,data\n5,0a 0b\n");
     if (capture.event_count() != 1 || capture.event_size(0) != 2) {
         std::fprintf(stderr, "the packaged capture reader read the wrong thing\n");
+        return 1;
+    }
+
+    bw::Model model;
+    const std::size_t type = model.add_message_type("m");
+    bw::FieldInfo field;
+    field.kind     = bw::FieldKind::Enum;
+    field.bit_size = 8;
+    model.add_field(type, "a", field, "");
+    const bw::FieldScore score = bw::score_fields(model, type, model, type);
+    if (score.exact_fields != 1 || !score.checksum_match) {
+        std::fprintf(stderr, "the packaged model and evaluation code scored the wrong thing\n");
         return 1;
     }
 

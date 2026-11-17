@@ -9,10 +9,12 @@
 // job of segmentation, which needs the events exactly as they were captured.
 // The file format is specified in docs/capture-format.md.
 //
-// The shape of this API follows the rule in docs/roadmap.md, so that it can be
-// bound to other languages without a facade: <cstdint> types, no aliases;
+// The shape of this API follows the rule in docs/roadmap.md, which aims at
+// binding it to other languages without a facade: <cstdint> types, no aliases;
 // plain structs for what crosses the boundary; the collection owned by a class
-// and reached through accessors.
+// and reached through accessors. That aim has not been checked against a
+// binding generator yet. CaptureError, which derives from std::runtime_error,
+// is the part most likely to need care.
 
 #ifndef BW_CAPTURE_H
 #define BW_CAPTURE_H
