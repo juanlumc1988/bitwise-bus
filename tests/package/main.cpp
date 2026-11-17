@@ -2,12 +2,14 @@
 // Part of bitwise-bus -- inferring undocumented bus protocols from captures.
 //
 // Link check for the installed package: two real Modbus RTU requests go in,
-// CRC-16/MODBUS, whole frame, little-endian has to come out.
+// CRC-16/MODBUS, whole frame, little-endian has to come out. A one-line capture
+// is read as well, so the capture header is checked as C++11 and linked.
 
 #include <cstdio>
 #include <cstring>
 #include <vector>
 
+#include "bw/capture.h"
 #include "bw/crc_search.h"
 
 int main() {
@@ -17,6 +19,13 @@ int main() {
     std::vector<bw::Frame> frames(2);
     frames[0].bytes.assign(a, a + sizeof(a));
     frames[1].bytes.assign(b, b + sizeof(b));
+
+    // The capture header has to be plain C++11 too, and its code has to be in the package.
+    const bw::Capture capture = bw::parse_capture_csv("time_ns,data\n5,0a 0b\n");
+    if (capture.event_count() != 1 || capture.event_size(0) != 2) {
+        std::fprintf(stderr, "the packaged capture reader read the wrong thing\n");
+        return 1;
+    }
 
     const bw::SearchReport report = bw::search(frames);
     for (std::size_t i = 0; i < report.candidates.size(); ++i) {

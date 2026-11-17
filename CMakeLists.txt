@@ -45,7 +45,8 @@ endfunction()
 add_library(bw_core STATIC
     src/crc.cpp
     src/catalog.cpp
-    src/crc_search.cpp)
+    src/crc_search.cpp
+    src/capture.cpp)
 add_library(bw::core ALIAS bw_core)
 set_target_properties(bw_core PROPERTIES EXPORT_NAME core)
 target_include_directories(bw_core PUBLIC
@@ -115,10 +116,21 @@ if(BW_BUILD_TESTS)
     add_executable(bw_tests
         tests/main.cpp
         tests/test_crc.cpp
-        tests/test_crc_search.cpp)
+        tests/test_crc_search.cpp
+        tests/test_capture.cpp)
     target_include_directories(bw_tests PRIVATE tests/third_party)
+    target_compile_definitions(bw_tests PRIVATE
+        "BW_CORPUS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus\"")
     target_link_libraries(bw_tests PRIVATE bw_core)
     bw_configure(bw_tests)
 
     add_test(NAME unit COMMAND bw_tests --force-colors=off)
+
+    # The command line, on a file that is checked in: argument handling and
+    # file reading are covered by no unit test.
+    # The pattern spans lines with `.*` rather than `\n`: on Windows the lines end in CRLF.
+    add_test(NAME cli_capture_info
+        COMMAND bitwise capture-info ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/modbus_rtu_two_requests.csv)
+    set_tests_properties(cli_capture_info PROPERTIES PASS_REGULAR_EXPRESSION
+        "events +16 \\(16 bytes\\).*channels +1: rs485 \\(16\\).*intervals +15 between timed events: min 1145833 ns, median 1145833 ns, max 11145833 ns")
 endif()
