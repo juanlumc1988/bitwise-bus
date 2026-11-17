@@ -206,8 +206,9 @@ later, and several will lean on code written for Track A.
 ## Delivery
 
 - **Pull requests.** One concern each, reviewable in one sitting, around 800
-  changed lines at most, not counting vendored code, fixtures and golden
-  files. `main` stays green and releasable after every merge. A stage stays
+  changed lines of code at most, not counting tests, documentation, vendored
+  code, fixtures and golden files: tests are as large as what they test and
+  are read differently. `main` stays green and releasable after every merge. A stage stays
   behind its interface until it is wired in, so unfinished work never reaches
   the command line.
 - **The skeleton is five pull requests,** along its seams. It was three until
@@ -303,6 +304,29 @@ the reason the README gives for `rewind-mcu`.
      finding (leak detection off, because the interpreter leaks by design;
      libstdc++ has to be preloaded, because Python does not link it).
 
+  **The skeleton's headers** (`capture.h`, `model.h`, `evaluate.h`,
+  `dataset.h`, `protocol.h`) were tried afterwards, with bridgefex at
+  `adb22af`, libclang 20.1.2 and Python 3.13. `model.h` and `evaluate.h` are
+  accepted as they are. Two things stop the rest, each with a small remedy
+  that is not in the repository yet:
+
+  - `CaptureError` derives from `std::runtime_error`, which cannot be wrapped.
+    Defined in a header of its own that is not given to bridgefex (`capture.h`
+    would then only mention it in comments) the error goes away, and
+    exceptions still reach Python as `bw.Error` with their message.
+  - `find_protocol` returns a raw pointer to a wrapped class. An annotations
+    file says who owns it: `[bw_find_protocol]` and `return = "borrowed"`.
+
+  `dataset.h` and `protocol.h` use classes of the other headers, so the five
+  are given together; one at a time they are refused for that reason alone.
+  With both remedies, applied to a copy of the headers, the five generate 26
+  files. The shared library built from them and `bw_core`, loaded from Python,
+  generated a Modbus RTU capture whose CSV is identical to the checked-in
+  golden file, returned the borrowed protocol from `find_protocol` and
+  answered `conforms` on it, and raised `bw.Error` with the library's message
+  for an unknown protocol and for a malformed capture. Not run on these
+  headers: the sanitizers and any other platform.
+
   Not tried: any platform other than Linux x86-64, threads, callbacks and
   directors, large captures, Python versions other than 3.13. To repeat the
   first step, from a directory holding `include/bw/`:
@@ -311,6 +335,10 @@ the reason the README gives for `rewind-mcu`.
   bridgefex --module bw --output out --std c++17 -I include --include-root include \
       include/bw/types.h include/bw/crc.h include/bw/catalog.h include/bw/crc_search.h
   ```
+
+  For the skeleton's headers, the same with the five of them and
+  `--annotations FILE`, FILE holding `[bw_find_protocol]` and
+  `return = "borrowed"` on two lines.
 
   A gap found when binding is also feedback for bridgefex.
 
