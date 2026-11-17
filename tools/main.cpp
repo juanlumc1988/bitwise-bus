@@ -7,6 +7,7 @@
 //   bitwise protocols [NAME]    the known protocols, or the model of one
 //   bitwise synth NAME          a synthetic capture of a known protocol
 //   bitwise analyze FILE        infer the protocol of a capture
+//   bitwise export FILE         the inferred protocol as a Kaitai Struct definition
 
 #include <cstdint>
 #include <cstdio>
@@ -18,6 +19,7 @@
 
 #include "bw/analyze.h"
 #include "bw/capture.h"
+#include "bw/kaitai.h"
 #include "bw/crc_search.h"
 #include "bw/protocol.h"
 
@@ -34,6 +36,7 @@ int usage() {
         "  bitwise protocols [NAME]\n"
         "  bitwise synth NAME [--seed N] [--frames N] [--jitter-permille N]\n"
         "  bitwise analyze FILE [--min-gap-ratio N] [--min-frames N]\n"
+        "  bitwise export FILE [--format kaitai] [--type N] [--id NAME] [--min-gap-ratio N] [--min-frames N]\n"
         "\n"
         "Each FILE is one captured frame, raw bytes. Give it as many frames\n"
         "as you have: a single narrow checksum proves nothing, and the tool\n"
@@ -293,6 +296,94 @@ int cmd_analyze(const std::vector<std::string>& args) {
     }
 }
 
+int cmd_export(const std::vector<std::string>& args) {
+    std::string        path;
+    std::string        id;
+    std::uint64_t      type = 0;
+    bw::AnalyzeOptions options;
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        const std::string& arg    = args[i];
+        std::uint64_t      number = 0;
+        const bool         takes_value = arg == "--format" || arg == "--type" || arg == "--id" ||
+                                         arg == "--min-gap-ratio" || arg == "--min-frames";
+        if (takes_value && i + 1 >= args.size()) {
+            std::fprintf(stderr, "bitwise: %s needs a value\n", arg.c_str());
+            return 2;
+        }
+        if (arg == "--format") {
+            if (args[++i] != "kaitai") {
+                std::fprintf(stderr, "bitwise: --format: unknown format '%s'; known: kaitai\n", args[i].c_str());
+                return 2;
+            }
+        } else if (arg == "--type") {
+            if (!parse_unsigned(args[++i], 1000000, &number)) {
+                std::fprintf(stderr, "bitwise: --type: '%s' is not a whole number from 0 to 1000000\n",
+                             args[i].c_str());
+                return 2;
+            }
+            type = number;
+        } else if (arg == "--id") {
+            id = args[++i];
+        } else if (arg == "--min-gap-ratio") {
+            if (!parse_unsigned(args[++i], 1000000, &number) || number == 0) {
+                std::fprintf(stderr, "bitwise: --min-gap-ratio: '%s' is not a whole number from 1 to 1000000\n",
+                             args[i].c_str());
+                return 2;
+            }
+            options.segmentation.min_gap_ratio = static_cast<std::uint32_t>(number);
+        } else if (arg == "--min-frames") {
+            if (!parse_unsigned(args[++i], 1000000, &number) || number == 0) {
+                std::fprintf(stderr, "bitwise: --min-frames: '%s' is not a whole number from 1 to 1000000\n",
+                             args[i].c_str());
+                return 2;
+            }
+            options.fields.min_frames = static_cast<std::uint32_t>(number);
+        } else if (!arg.empty() && arg[0] == '-') {
+            std::fprintf(stderr, "bitwise: unknown option '%s'\n", arg.c_str());
+            return 2;
+        } else if (path.empty()) {
+            path = arg;
+        } else {
+            std::fprintf(stderr, "bitwise: export takes exactly one file\n");
+            return 2;
+        }
+    }
+    if (path.empty()) {
+        std::fprintf(stderr, "bitwise: export takes exactly one file\n");
+        return 2;
+    }
+
+    std::string text;
+    if (!read_text_file(path.c_str(), &text)) {
+        std::fprintf(stderr, "bitwise: cannot read %s\n", path.c_str());
+        return 1;
+    }
+    try {
+        const bw::Analysis analysis = bw::analyze(bw::parse_capture_csv(text), options);
+        const bw::Model    model    = analysis.model();
+        if (model.message_type_count() == 0) {
+            std::fprintf(stderr, "bitwise: nothing to export: the analysis of %s found no message type "
+                                 "(try 'bitwise analyze')\n", path.c_str());
+            return 1;
+        }
+        if (type >= model.message_type_count()) {
+            std::fprintf(stderr, "bitwise: --type %llu: the analysis found %llu message type(s)\n",
+                         ull(type), ull(model.message_type_count()));
+            return 1;
+        }
+        const std::string name = id.empty() ? model.message_type_name(static_cast<std::size_t>(type)) : id;
+        const std::string out  = bw::export_kaitai(model, static_cast<std::size_t>(type), name);
+        std::fwrite(out.data(), 1, out.size(), stdout);
+        return 0;
+    } catch (const bw::CaptureError& e) {
+        std::fprintf(stderr, "bitwise: %s: %s\n", path.c_str(), e.what());
+        return 1;
+    } catch (const std::invalid_argument& e) {
+        std::fprintf(stderr, "bitwise: %s\n", e.what());
+        return 1;
+    }
+}
+
 int cmd_catalog() {
     std::printf("%-20s %6s  %-18s %-18s %-5s %-6s %s\n",
                 "name", "width", "poly", "init", "refin", "refout", "xorout");
@@ -391,13 +482,14 @@ int main(int argc, char** argv) {
     if (command == "crc-catalog") {
         return cmd_catalog();
     }
-    if (command == "protocols" || command == "synth" || command == "analyze") {
+    if (command == "protocols" || command == "synth" || command == "analyze" || command == "export") {
         std::vector<std::string> args;
         for (int i = 2; i < argc; ++i) {
             args.push_back(argv[i]);
         }
         return command == "protocols" ? cmd_protocols(args)
-             : command == "synth"     ? cmd_synth(args) : cmd_analyze(args);
+             : command == "synth"     ? cmd_synth(args)
+             : command == "analyze"   ? cmd_analyze(args) : cmd_export(args);
     }
     if (command == "capture-info") {
         std::vector<std::string> args;
