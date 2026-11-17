@@ -105,11 +105,19 @@ Every stage starts as the simplest thing that can work:
 | Stage | Skeleton version |
 |---|---|
 | 1 capture | A CSV importer with timestamps. |
-| 2 checksums | The existing CRC search, run over the segmented frames. |
-| 3 segmentation | Split at the large idle gaps. |
-| 4 discovery | Byte-offset entropy among frames of the same length and first byte. |
-| 5 typing | Constant, enum, counter, length. |
+| 2 checksums | The existing CRC search, run over the segmented frames of each size. |
+| 3 segmentation | Split at the large idle gaps: the widest hole, in ratio, between the short gaps and the long ones. |
+| 4 discovery | Byte-offset statistics among frames of the same length; a run of bytes with no structure is one field. |
+| 5 typing | Constant, enum, counter; payload, which claims nothing, for the rest. |
 | 6 export | Kaitai Struct. |
+
+Two things changed from the first plan, both for the same reason: a first
+version should not claim what it cannot support. Frames are grouped by length
+alone, not by length and first byte: in Modbus the first byte is an address, and
+grouping by it would split one message type into one per device. And a length
+field cannot be told apart from a constant among frames of one length, so
+typing it waits for frames of varying length, with the message-type work in the
+deepening of stage 4.
 
 It also brings the pieces that are not stages: the model type, a Modbus RTU
 generator, the evaluation harness and `bitwise analyze`. The parametric
@@ -119,6 +127,14 @@ not a family of them.
 **Done when** `bitwise analyze` on synthetic Modbus RTU captures recovers the
 framing, the checksum and the field boundaries of the generator's model, and
 the exported definition parses the capture back into the same bytes.
+
+The first half is met (`tests/test_analyze.cpp`): on 100 captures of 50 frames
+(25 seeds, four levels of timing noise up to the generator's maximum), every
+frame is found exactly, every boundary of the true model is found, and the
+checksum matches in position, size, byte order, coverage and algorithm. The
+found model has one boundary more than the truth: the high byte of the quantity
+is always 0, so it is a constant of its own, and nothing in a capture says it
+belongs with the byte after it. That is the baseline stage 4 starts from.
 
 ### Then, stage by stage
 
@@ -219,7 +235,8 @@ later, and several will lean on code written for Track A.
      `bw/evaluate.h`);
   3. the protocol registry, the Modbus RTU generator and `bitwise synth` (done:
      `bw/protocol.h` and `bw/dataset.h`);
-  4. the skeleton stages and `bitwise analyze`;
+  4. the skeleton stages and `bitwise analyze` (done: `bw/segmentation.h`,
+     `bw/checksum.h`, `bw/fields.h` and `bw/analyze.h`);
   5. the Kaitai exporter, round-trip checking, a README demo and a release.
 - **Deepening** is one pull request per stage per wave of protocols, each with
   its corpus additions and the new metrics baseline. **Track B** is one pull
@@ -304,28 +321,28 @@ the reason the README gives for `rewind-mcu`.
      finding (leak detection off, because the interpreter leaks by design;
      libstdc++ has to be preloaded, because Python does not link it).
 
-  **The skeleton's headers** (`capture.h`, `model.h`, `evaluate.h`,
-  `dataset.h`, `protocol.h`) were tried afterwards, with bridgefex at
-  `adb22af`, libclang 20.1.2 and Python 3.13. `model.h` and `evaluate.h` are
-  accepted as they are. Two things stop the rest, each with a small remedy
-  that is not in the repository yet:
+  **The skeleton's headers** were tried afterwards, with bridgefex at
+  `adb22af`, libclang 20.1.2 and Python 3.13, and two small remedies came out of
+  it, both now in the repository:
 
   - `CaptureError` derives from `std::runtime_error`, which cannot be wrapped.
-    Defined in a header of its own that is not given to bridgefex (`capture.h`
-    would then only mention it in comments) the error goes away, and
-    exceptions still reach Python as `bw.Error` with their message.
-  - `find_protocol` returns a raw pointer to a wrapped class. An annotations
-    file says who owns it: `[bw_find_protocol]` and `return = "borrowed"`.
+    It has a header of its own, `bw/capture_error.h`, that is not given to
+    bridgefex; `capture.h` includes it, so nothing changes for a C++ user, and
+    exceptions reach Python as `bw.Error` with their message.
+  - `find_protocol` returns a raw pointer to a wrapped class, so an annotations
+    file, `bindings/annotations.toml`, says who owns it: it is borrowed.
 
-  `dataset.h` and `protocol.h` use classes of the other headers, so the five
-  are given together; one at a time they are refused for that reason alone.
-  With both remedies, applied to a copy of the headers, the five generate 26
-  files. The shared library built from them and `bw_core`, loaded from Python,
-  generated a Modbus RTU capture whose CSV is identical to the checked-in
-  golden file, returned the borrowed protocol from `find_protocol` and
-  answered `conforms` on it, and raised `bw.Error` with the library's message
-  for an unknown protocol and for a malformed capture. Not run on these
-  headers: the sanitizers and any other platform.
+  With those, bridgefex accepts `capture.h`, `model.h`, `evaluate.h`,
+  `dataset.h`, `protocol.h`, `segmentation.h`, `checksum.h`, `fields.h` and
+  `analyze.h` as they are, together (a header that uses a class of another is
+  refused when given alone) and generates 42 files. The shared library built
+  from them and `bw_core` works from Python: a synthetic Modbus RTU capture
+  generated and analysed there gives a report byte for byte the one `bitwise
+  analyze` prints, `find_protocol` returns the borrowed protocol, and an
+  unknown protocol name and a malformed capture raise `bw.Error` with the
+  library's message. The stage headers were written to the shape rule above,
+  and that is what made this work without a facade. Not run on these headers:
+  the sanitizers and any other platform.
 
   Not tried: any platform other than Linux x86-64, threads, callbacks and
   directors, large captures, Python versions other than 3.13. To repeat the
@@ -336,9 +353,15 @@ the reason the README gives for `rewind-mcu`.
       include/bw/types.h include/bw/crc.h include/bw/catalog.h include/bw/crc_search.h
   ```
 
-  For the skeleton's headers, the same with the five of them and
-  `--annotations FILE`, FILE holding `[bw_find_protocol]` and
-  `return = "borrowed"` on two lines.
+  For the headers of the skeleton, from the root of the repository:
+
+  ```console
+  bridgefex --module bw --output out --std c++17 -I include --include-root include \
+      --annotations bindings/annotations.toml \
+      include/bw/capture.h include/bw/model.h include/bw/evaluate.h include/bw/dataset.h \
+      include/bw/protocol.h include/bw/segmentation.h include/bw/checksum.h \
+      include/bw/fields.h include/bw/analyze.h
+  ```
 
   A gap found when binding is also feedback for bridgefex.
 

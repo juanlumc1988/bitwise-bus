@@ -29,6 +29,7 @@
 #include "bw/crc.h"
 #include "bw/evaluate.h"
 #include "bw/protocol.h"
+#include "bw/segmentation.h"
 
 using bw::Capture;
 using bw::Dataset;
@@ -87,20 +88,10 @@ std::string csv(const Dataset& d) {
     return bw::format_capture_csv(d.capture());
 }
 
-// The bytes of every event of a frame, in order.
-Bytes frame_bytes(const Capture& c, const FrameSpan& f) {
-    Bytes out;
-    for (std::uint64_t i = 0; i < f.event_count; ++i) {
-        const Bytes b = c.event_bytes(static_cast<std::size_t>(f.first_event + i));
-        out.insert(out.end(), b.begin(), b.end());
-    }
-    return out;
-}
-
 Bytes all_bytes(const Capture& c) {
     FrameSpan whole;
     whole.event_count = c.event_count();
-    return frame_bytes(c, whole);
+    return bw::frame_bytes(c, whole);
 }
 
 // CRC-16/MODBUS from the inference stage's catalogue: the other implementation
@@ -203,7 +194,7 @@ TEST_CASE("every registered protocol keeps the promises of a protocol") {
 
         // Every frame the dataset says is there belongs to the protocol.
         for (std::size_t i = 0; i < data.frame_count(); ++i) {
-            CHECK(bw::protocol_conforms(name, frame_bytes(data.capture(), data.frame(i))));
+            CHECK(bw::protocol_conforms(name, bw::frame_bytes(data.capture(), data.frame(i))));
         }
 
         // Writing the capture to a file and reading it back changes nothing.
@@ -271,7 +262,7 @@ TEST_CASE("modbus-rtu: the frames are eight bytes, in the ranges they claim, wit
         CHECK(d.frame(i).event_count == 8);
         CHECK(d.frame_message_type(i) == 0);
 
-        const Bytes f = frame_bytes(c, d.frame(i));
+        const Bytes f = bw::frame_bytes(c, d.frame(i));
         REQUIRE(f.size() == 8);
         CHECK(f[0] >= 1);
         CHECK(f[0] <= 3);

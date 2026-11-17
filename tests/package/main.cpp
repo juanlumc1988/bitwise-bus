@@ -3,13 +3,14 @@
 //
 // Link check for the installed package: two real Modbus RTU requests go in,
 // CRC-16/MODBUS, whole frame, little-endian has to come out. A one-line capture
-// is read as well, a model is built and scored, and a synthetic capture is made, so that
-// the capture, model, evaluation and protocol headers are checked as C++11 and linked.
+// is read as well, a model is built and scored, a synthetic capture is made and analysed, so that
+// the capture, model, evaluation, protocol and pipeline headers are checked as C++11 and linked.
 
 #include <cstdio>
 #include <cstring>
 #include <vector>
 
+#include "bw/analyze.h"
 #include "bw/capture.h"
 #include "bw/crc_search.h"
 #include "bw/evaluate.h"
@@ -49,6 +50,16 @@ int main() {
     const bw::Dataset dataset = bw::generate_protocol("modbus-rtu", generate);
     if (dataset.frame_count() != 2 || dataset.capture().event_count() != 16) {
         std::fprintf(stderr, "the packaged generator made the wrong capture\n");
+        return 1;
+    }
+
+    // So is the pipeline: the checksum comes out of a synthetic capture as the last field of the model.
+    generate.frames = 20;
+    const bw::Analysis analysis =
+        bw::analyze(bw::generate_protocol("modbus-rtu", generate).capture(), bw::AnalyzeOptions());
+    if (analysis.type_count() != 1 ||
+        analysis.model().field_detail(0, analysis.model().field_count(0) - 1) != "CRC-16/MODBUS") {
+        std::fprintf(stderr, "the packaged pipeline found the wrong model\n");
         return 1;
     }
 

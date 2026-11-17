@@ -51,7 +51,11 @@ add_library(bw_core STATIC
     src/evaluate.cpp
     src/dataset.cpp
     src/protocol.cpp
-    src/protocols/modbus_rtu.cpp)
+    src/protocols/modbus_rtu.cpp
+    src/segmentation.cpp
+    src/checksum.cpp
+    src/fields.cpp
+    src/analyze.cpp)
 add_library(bw::core ALIAS bw_core)
 set_target_properties(bw_core PROPERTIES EXPORT_NAME core)
 target_include_directories(bw_core PUBLIC
@@ -126,7 +130,11 @@ if(BW_BUILD_TESTS)
         tests/test_model.cpp
         tests/test_evaluate.cpp
         tests/test_dataset.cpp
-        tests/test_protocol.cpp)
+        tests/test_protocol.cpp
+        tests/test_segmentation.cpp
+        tests/test_checksum.cpp
+        tests/test_fields.cpp
+        tests/test_analyze.cpp)
     target_include_directories(bw_tests PRIVATE tests/third_party)
     target_compile_definitions(bw_tests PRIVATE
         "BW_CORPUS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus\"")
@@ -163,4 +171,33 @@ if(BW_BUILD_TESTS)
     add_test(NAME cli_synth_missing_value COMMAND bitwise synth modbus-rtu --frames)
     set_tests_properties(cli_synth_missing_value PROPERTIES PASS_REGULAR_EXPRESSION
         "--frames needs a value")
+
+    # The pipeline, on a synthetic Modbus RTU capture of 50 frames made by a second
+    # implementation: the framing, the checksum and the fields it recovers.
+    add_test(NAME cli_analyze
+        COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_modbus_rtu_seed1_50frames_jitter300.csv)
+    set_tests_properties(cli_analyze PROPERTIES PASS_REGULAR_EXPRESSION
+        "idle gap: a gap of at least 6918373 ns ends a frame.*type0 +8 bytes, 50 frames; checksum CRC-16/MODBUS, 16 bits little-endian, evidence 800 bits.*5 \"checksum\" +checksum +16 bits @48 little-endian covers 0..4")
+    add_test(NAME cli_analyze_option
+        COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_modbus_rtu_seed1_50frames_jitter300.csv
+                --min-frames 51)
+    set_tests_properties(cli_analyze_option PROPERTIES PASS_REGULAR_EXPRESSION
+        "frames +50 \\(50 of a size too rare to say anything about\\)")
+    add_test(NAME cli_analyze_no_file COMMAND bitwise analyze)
+    set_tests_properties(cli_analyze_no_file PROPERTIES PASS_REGULAR_EXPRESSION
+        "analyze takes exactly one file")
+    add_test(NAME cli_analyze_missing_file COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/no-such-file.csv)
+    set_tests_properties(cli_analyze_missing_file PROPERTIES PASS_REGULAR_EXPRESSION
+        "cannot read .*no-such-file.csv")
+    add_test(NAME cli_analyze_not_a_capture COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/LICENSE)
+    set_tests_properties(cli_analyze_not_a_capture PROPERTIES PASS_REGULAR_EXPRESSION
+        "LICENSE: line [0-9]+: ")
+    add_test(NAME cli_analyze_bad_number
+        COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/modbus_rtu_two_requests.csv --min-frames 0)
+    set_tests_properties(cli_analyze_bad_number PROPERTIES PASS_REGULAR_EXPRESSION
+        "--min-frames: '0' is not a whole number from 1 to 1000000")
+    add_test(NAME cli_analyze_missing_value
+        COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/modbus_rtu_two_requests.csv --min-gap-ratio)
+    set_tests_properties(cli_analyze_missing_value PROPERTIES PASS_REGULAR_EXPRESSION
+        "--min-gap-ratio needs a value")
 endif()
