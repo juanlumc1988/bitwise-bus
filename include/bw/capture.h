@@ -12,18 +12,20 @@
 // The shape of this API follows the rule in docs/roadmap.md, which aims at
 // binding it to other languages without a facade: <cstdint> types, no aliases;
 // plain structs for what crosses the boundary; the collection owned by a class
-// and reached through accessors. That aim has not been checked against a
-// binding generator yet. CaptureError, which derives from std::runtime_error,
-// is the part most likely to need care.
+// and reached through accessors. bridgefex accepts it as it is. CaptureError
+// lives in its own header, capture_error.h, which is not given to bridgefex:
+// it derives from std::runtime_error, which cannot be wrapped, and an
+// exception reaches a binding as an error with its message.
 
 #ifndef BW_CAPTURE_H
 #define BW_CAPTURE_H
 
 #include <cstddef>
 #include <cstdint>
-#include <stdexcept>
 #include <string>
 #include <vector>
+
+#include "bw/capture_error.h"
 
 namespace bw {
 
@@ -84,17 +86,6 @@ private:
     std::int64_t               last_time_     = 0;
     bool                       has_last_time_ = false;
     std::size_t                timed_events_  = 0;
-};
-
-// A malformed capture file. what() starts with "line N: " when the problem is
-// on a line.
-class CaptureError : public std::runtime_error {
-public:
-    CaptureError(std::size_t line, const std::string& message);
-    std::size_t line() const;            // 1-based; 0 when not tied to a line
-
-private:
-    std::size_t line_;
 };
 
 // Reads a capture file whole or not at all; throws CaptureError.

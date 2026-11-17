@@ -63,6 +63,8 @@ struct FieldScore {
     bool found_has_checksum = false;
     // True when both sides agree about the checksum: neither has one, or both
     // do and it has the same position, size, byte order, coverage and algorithm.
+    // Coverage is compared as the bits it spans, not as field indexes: a model
+    // that cuts the covered bytes into other fields has found the same checksum.
     bool checksum_match     = false;
 };
 
