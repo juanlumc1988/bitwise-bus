@@ -19,6 +19,7 @@
 #include <fstream>
 #include <iterator>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -43,6 +44,35 @@ std::string read_file(const std::string& name) {
     std::ifstream in(path.c_str(), std::ios::binary);
     REQUIRE_MESSAGE(in.good(), "cannot open " << path);
     return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+}
+
+// "" when the two are the same bytes; otherwise where they first differ. Two
+// captures that differ in a CR or a trailing space print as two identical
+// pages, and a failure that cannot be read costs a round trip to the CI.
+std::string first_difference(const std::string& actual, const std::string& expected) {
+    const std::size_t common = std::min(actual.size(), expected.size());
+    std::size_t       at     = 0;
+    while (at < common && actual[at] == expected[at]) {
+        ++at;
+    }
+    if (at == actual.size() && at == expected.size()) {
+        return std::string();
+    }
+    std::ostringstream out;
+    out << "sizes " << actual.size() << " and " << expected.size() << ", first difference at byte " << at;
+    const char* names[2] = {"actual", "expected"};
+    const std::string* sides[2] = {&actual, &expected};
+    for (int k = 0; k < 2; ++k) {
+        out << "; " << names[k] << " ";
+        if (at < sides[k]->size()) {
+            static const char digits[] = "0123456789abcdef";
+            const unsigned char byte = static_cast<unsigned char>((*sides[k])[at]);
+            out << "0x" << digits[byte >> 4] << digits[byte & 15];
+        } else {
+            out << "ends";
+        }
+    }
+    return out.str();
 }
 
 GenerateOptions options(std::uint64_t seed, std::uint32_t frames, std::uint32_t jitter = 0) {
@@ -221,10 +251,10 @@ TEST_CASE("modbus-rtu: its model is exactly the documented one") {
 TEST_CASE("modbus-rtu: a seed is a capture, the same on every platform") {
     // Produced by an independent implementation in Python, from the algorithm
     // documented in src/protocols/modbus_rtu.cpp.
-    CHECK(csv(bw::generate_protocol("modbus-rtu", options(1, 3))) ==
-          read_file("synth_modbus_rtu_seed1.csv"));
-    CHECK(csv(bw::generate_protocol("modbus-rtu", options(7, 3, 300))) ==
-          read_file("synth_modbus_rtu_seed7_jitter300.csv"));
+    CHECK(first_difference(csv(bw::generate_protocol("modbus-rtu", options(1, 3))),
+                           read_file("synth_modbus_rtu_seed1.csv")) == "");
+    CHECK(first_difference(csv(bw::generate_protocol("modbus-rtu", options(7, 3, 300))),
+                           read_file("synth_modbus_rtu_seed7_jitter300.csv")) == "");
 }
 
 TEST_CASE("modbus-rtu: the frames are eight bytes, in the ranges they claim, with the right CRC") {
