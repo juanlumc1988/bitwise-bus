@@ -71,16 +71,45 @@ bool find_checksum(const Model& model, std::size_t type, std::size_t* index) {
     return false;
 }
 
+// What a checksum covers, in bits. A field that is split in two, or two that
+// are merged, change the indexes of the fields a checksum covers and not what
+// it covers, so a model that cuts the bytes differently from the truth can
+// still have found the same checksum. When the covered fields are not all of a
+// fixed size at a fixed position there are no bits to compare, and the indexes
+// stand in for them.
+struct Coverage {
+    bool          in_bits = false;
+    std::uint64_t first   = 0;       // bit offset when in_bits, else a field index
+    std::uint64_t last    = 0;       // end bit offset when in_bits, else a field index
+};
+
+Coverage coverage_of(const Model& model, std::size_t type, const FieldInfo& checksum) {
+    Coverage out;
+    out.first = checksum.covers_first;
+    out.last  = checksum.covers_last;
+    const FieldInfo     last_info = model.field(type, checksum.covers_last);
+    const FieldPosition begin     = model.field_position(type, checksum.covers_first);
+    const FieldPosition end       = model.field_position(type, checksum.covers_last);
+    if (begin.fixed && end.fixed && last_info.size_kind == SizeKind::Fixed) {
+        out.in_bits = true;
+        out.first   = begin.bit_offset;
+        out.last    = end.bit_offset + last_info.bit_size;
+    }
+    return out;
+}
+
 bool same_checksum(const Model& truth, std::size_t truth_type, std::size_t truth_index,
                    const Model& found, std::size_t found_type, std::size_t found_index) {
     const FieldInfo     a  = truth.field(truth_type, truth_index);
     const FieldInfo     b  = found.field(found_type, found_index);
     const FieldPosition pa = truth.field_position(truth_type, truth_index);
     const FieldPosition pb = found.field_position(found_type, found_index);
+    const Coverage      ca = coverage_of(truth, truth_type, a);
+    const Coverage      cb = coverage_of(found, found_type, b);
     return pa.fixed == pb.fixed && (!pa.fixed || pa.bit_offset == pb.bit_offset) &&
            a.size_kind == b.size_kind && a.bit_size == b.bit_size &&
-           a.byte_order == b.byte_order && a.covers_first == b.covers_first &&
-           a.covers_last == b.covers_last &&
+           a.byte_order == b.byte_order &&
+           ca.in_bits == cb.in_bits && ca.first == cb.first && ca.last == cb.last &&
            truth.field_detail(truth_type, truth_index) == found.field_detail(found_type, found_index);
 }
 

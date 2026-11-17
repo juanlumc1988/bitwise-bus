@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "bw/evaluate.h"
@@ -181,7 +182,7 @@ TEST_CASE("fields: two fields merged lose a boundary and two exact fields, not t
     CHECK(s.boundary_hits == 5);                  // all real; the cuts at 8 were missed
     CHECK(s.exact_fields == 3);                   // register, quantity, crc
     CHECK(s.kind_hits == 3);
-    CHECK(s.checksum_match == false);             // it covers 0..2 in the found model, 0..3 in the truth
+    CHECK(s.checksum_match);                      // 0..2 here and 0..3 in the truth, both bits 0 to 48
 }
 
 TEST_CASE("fields: a cut in the wrong place is a wrong boundary") {
@@ -209,6 +210,90 @@ TEST_CASE("fields: the right place with the wrong kind is an exact field but not
     CHECK(s.kind_hits == 4);
     CHECK(s.boundary_hits == 6);
     CHECK(s.checksum_match);
+}
+
+TEST_CASE("fields: a checksum covers bits, whatever the fields it covers are cut into") {
+    const Model truth = fixtures::request_model();
+
+    // The same bits cut finer: quantity is two bytes here, so the CRC covers 0..4.
+    Model finer;
+    std::size_t t = finer.add_message_type("request");
+    finer.add_field(t, "address",  fixed(FieldKind::Enum, 8), "");
+    finer.add_field(t, "function", fixed(FieldKind::Enum, 8), "");
+    finer.add_field(t, "register", fixed(FieldKind::Payload, 16), "");
+    finer.add_field(t, "quantity_high", fixed(FieldKind::Constant, 8), "");
+    finer.add_field(t, "quantity_low", fixed(FieldKind::Payload, 8), "");
+    finer.add_field(t, "crc", fixtures::checksum(16, ByteOrder::Little, 0, 4), "CRC-16/MODBUS");
+    CHECK(bw::score_fields(truth, 0, finer, 0).checksum_match);
+    CHECK(bw::score_fields(finer, 0, truth, 0).checksum_match);        // and the other way round
+
+    // Covering one byte less is a different checksum, however the fields are cut.
+    Model shorter;
+    t = shorter.add_message_type("request");
+    shorter.add_field(t, "address",  fixed(FieldKind::Enum, 8), "");
+    shorter.add_field(t, "function", fixed(FieldKind::Enum, 8), "");
+    shorter.add_field(t, "register", fixed(FieldKind::Payload, 16), "");
+    shorter.add_field(t, "quantity_high", fixed(FieldKind::Constant, 8), "");
+    shorter.add_field(t, "quantity_low", fixed(FieldKind::Payload, 8), "");
+    shorter.add_field(t, "crc", fixtures::checksum(16, ByteOrder::Little, 0, 3), "CRC-16/MODBUS");
+    CHECK_FALSE(bw::score_fields(truth, 0, shorter, 0).checksum_match);
+
+    // Starting one byte later is too.
+    Model later;
+    t = later.add_message_type("request");
+    later.add_field(t, "address",  fixed(FieldKind::Enum, 8), "");
+    later.add_field(t, "function", fixed(FieldKind::Enum, 8), "");
+    later.add_field(t, "register", fixed(FieldKind::Payload, 16), "");
+    later.add_field(t, "quantity", fixed(FieldKind::Payload, 16), "");
+    later.add_field(t, "crc", fixtures::checksum(16, ByteOrder::Little, 1, 3), "CRC-16/MODBUS");
+    CHECK_FALSE(bw::score_fields(truth, 0, later, 0).checksum_match);
+}
+
+TEST_CASE("fields: when what a checksum covers has no fixed place, its coverage is compared by field index") {
+    // length | body, as long as the length says | crc over fields 0..last
+    const auto build = [](std::uint32_t first, std::uint32_t last) {
+        Model m;
+        const std::size_t t = m.add_message_type("variable");
+        m.add_field(t, "length", fixed(FieldKind::Length, 8), "");
+        bw::FieldInfo body;
+        body.kind       = FieldKind::Payload;
+        body.size_kind  = bw::SizeKind::FromField;
+        body.size_field = 0;
+        m.add_field(t, "body", body, "");
+        m.add_field(t, "crc", fixtures::checksum(16, ByteOrder::Little, first, last), "CRC-16/MODBUS");
+        return m;
+    };
+    CHECK(bw::score_fields(build(0, 1), 0, build(0, 1), 0).checksum_match);
+    CHECK_FALSE(bw::score_fields(build(0, 1), 0, build(1, 1), 0).checksum_match);      // another first field
+    CHECK_FALSE(bw::score_fields(build(0, 1), 0, build(0, 0), 0).checksum_match);      // placed against not placed
+}
+
+TEST_CASE("fields: coverage in bits and coverage by index are never the same thing, whatever the numbers") {
+    // Covers fields 0..1, which is bits 0 to 16, and the checksum itself has no fixed place...
+    Model placed;
+    std::size_t t = placed.add_message_type("a");
+    placed.add_field(t, "length", fixed(FieldKind::Length, 8), "");
+    placed.add_field(t, "byte", fixed(FieldKind::Payload, 8), "");
+    bw::FieldInfo body;
+    body.kind       = FieldKind::Payload;
+    body.size_kind  = bw::SizeKind::FromField;
+    body.size_field = 0;
+    placed.add_field(t, "body", body, "");
+    placed.add_field(t, "crc", fixtures::checksum(16, ByteOrder::Little, 0, 1), "CRC-16/MODBUS");
+
+    // ...and here fields 0..16, in which the covered ones have no fixed place, so the
+    // numbers 0 and 16 are indexes. They are the same numbers as bits 0 and 16.
+    Model indexed;
+    t = indexed.add_message_type("b");
+    indexed.add_field(t, "length", fixed(FieldKind::Length, 8), "");
+    indexed.add_field(t, "body", body, "");
+    for (int i = 0; i < 15; ++i) {
+        indexed.add_field(t, "byte" + std::to_string(i), fixed(FieldKind::Payload, 8), "");
+    }
+    indexed.add_field(t, "crc", fixtures::checksum(16, ByteOrder::Little, 0, 16), "CRC-16/MODBUS");
+
+    CHECK_FALSE(bw::score_fields(placed, 0, indexed, 0).checksum_match);
+    CHECK_FALSE(bw::score_fields(indexed, 0, placed, 0).checksum_match);
 }
 
 TEST_CASE("fields: a checksum matches only when position, size, order, coverage and algorithm all do") {

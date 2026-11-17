@@ -6,6 +6,7 @@
 //   bitwise capture-info FILE   a first look at a capture file
 //   bitwise protocols [NAME]    the known protocols, or the model of one
 //   bitwise synth NAME          a synthetic capture of a known protocol
+//   bitwise analyze FILE        infer the protocol of a capture
 
 #include <cstdint>
 #include <cstdio>
@@ -15,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "bw/analyze.h"
 #include "bw/capture.h"
 #include "bw/crc_search.h"
 #include "bw/protocol.h"
@@ -31,6 +33,7 @@ int usage() {
         "  bitwise capture-info FILE\n"
         "  bitwise protocols [NAME]\n"
         "  bitwise synth NAME [--seed N] [--frames N] [--jitter-permille N]\n"
+        "  bitwise analyze FILE [--min-gap-ratio N] [--min-frames N]\n"
         "\n"
         "Each FILE is one captured frame, raw bytes. Give it as many frames\n"
         "as you have: a single narrow checksum proves nothing, and the tool\n"
@@ -236,6 +239,60 @@ int cmd_synth(const std::vector<std::string>& args) {
     }
 }
 
+int cmd_analyze(const std::vector<std::string>& args) {
+    std::string        path;
+    bw::AnalyzeOptions options;
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        const std::string& arg    = args[i];
+        std::uint64_t      number = 0;
+        if ((arg == "--min-gap-ratio" || arg == "--min-frames") && i + 1 >= args.size()) {
+            std::fprintf(stderr, "bitwise: %s needs a value\n", arg.c_str());
+            return 2;
+        }
+        if (arg == "--min-gap-ratio") {
+            if (!parse_unsigned(args[++i], 1000000, &number) || number == 0) {
+                std::fprintf(stderr, "bitwise: --min-gap-ratio: '%s' is not a whole number from 1 to 1000000\n",
+                             args[i].c_str());
+                return 2;
+            }
+            options.segmentation.min_gap_ratio = static_cast<std::uint32_t>(number);
+        } else if (arg == "--min-frames") {
+            if (!parse_unsigned(args[++i], 1000000, &number) || number == 0) {
+                std::fprintf(stderr, "bitwise: --min-frames: '%s' is not a whole number from 1 to 1000000\n",
+                             args[i].c_str());
+                return 2;
+            }
+            options.fields.min_frames = static_cast<std::uint32_t>(number);
+        } else if (!arg.empty() && arg[0] == '-') {
+            std::fprintf(stderr, "bitwise: unknown option '%s'\n", arg.c_str());
+            return 2;
+        } else if (path.empty()) {
+            path = arg;
+        } else {
+            std::fprintf(stderr, "bitwise: analyze takes exactly one file\n");
+            return 2;
+        }
+    }
+    if (path.empty()) {
+        std::fprintf(stderr, "bitwise: analyze takes exactly one file\n");
+        return 2;
+    }
+
+    std::string text;
+    if (!read_text_file(path.c_str(), &text)) {
+        std::fprintf(stderr, "bitwise: cannot read %s\n", path.c_str());
+        return 1;
+    }
+    try {
+        const std::string report = bw::describe_analysis(bw::analyze(bw::parse_capture_csv(text), options));
+        std::fwrite(report.data(), 1, report.size(), stdout);
+        return 0;
+    } catch (const bw::CaptureError& e) {
+        std::fprintf(stderr, "bitwise: %s: %s\n", path.c_str(), e.what());
+        return 1;
+    }
+}
+
 int cmd_catalog() {
     std::printf("%-20s %6s  %-18s %-18s %-5s %-6s %s\n",
                 "name", "width", "poly", "init", "refin", "refout", "xorout");
@@ -334,12 +391,13 @@ int main(int argc, char** argv) {
     if (command == "crc-catalog") {
         return cmd_catalog();
     }
-    if (command == "protocols" || command == "synth") {
+    if (command == "protocols" || command == "synth" || command == "analyze") {
         std::vector<std::string> args;
         for (int i = 2; i < argc; ++i) {
             args.push_back(argv[i]);
         }
-        return command == "protocols" ? cmd_protocols(args) : cmd_synth(args);
+        return command == "protocols" ? cmd_protocols(args)
+             : command == "synth"     ? cmd_synth(args) : cmd_analyze(args);
     }
     if (command == "capture-info") {
         std::vector<std::string> args;

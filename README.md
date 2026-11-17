@@ -6,10 +6,13 @@ Infer undocumented bus protocols from captures. The command it builds is
 `bitwise`.
 
 **Status: early.** The CRC identification stage works end to end and is
-covered by tests; the first release, 0.1.0, ships it. The rest of the
-pipeline — frame segmentation, field discovery, field typing — is designed and
-not written. See [What this does not do yet](#what-this-does-not-do-yet) and
-the [roadmap](docs/roadmap.md).
+covered by tests; the first release, 0.1.0, ships it. A first version of every
+other stage now exists too, behind `bitwise analyze`: it cuts a capture into
+frames at the long gaps, finds the checksum, and splits the frames into typed
+fields. It is measured on synthetic Modbus RTU captures only, and it is a
+skeleton to be deepened, not a finished tool: see
+[What this does not do yet](#what-this-does-not-do-yet) and the
+[roadmap](docs/roadmap.md).
 
 ## The problem
 
@@ -183,6 +186,12 @@ bitwise synth NAME                  a synthetic capture of a known protocol,
                                     every platform (default 1)
     --frames N                      how many frames, 0 to 100000 (default 20)
     --jitter-permille N             timing noise, 0 to 500 (default 0)
+bitwise analyze FILE                infer the protocol of a capture file
+    --min-gap-ratio N               how many times longer the gaps between
+                                    frames must be than those inside one
+                                    (default 3)
+    --min-frames N                  fewest frames of a size to say anything
+                                    about it (default 4)
 ```
 
 For `crc-find`, each `FILE` is one captured frame, raw bytes. `capture-info`
@@ -205,22 +214,54 @@ time_ns,channel,direction,id,data
 2291666,rs485,,,55
 ```
 
+`analyze` runs the pipeline on a capture file and prints what each stage
+found, then the model. On 50 synthetic Modbus RTU requests with timing noise
+(`tests/corpus/synth_modbus_rtu_seed1_50frames_jitter300.csv`):
+
+```console
+$ bitwise analyze tests/corpus/synth_modbus_rtu_seed1_50frames_jitter300.csv
+events     400 (400 bytes)
+framing    idle gap: a gap of at least 6918373 ns ends a frame (49 gaps between frames, 350 inside them, the longest 1464359 ns)
+frames     50
+type0      8 bytes, 50 frames; checksum CRC-16/MODBUS, 16 bits little-endian, evidence 800 bits
+framing: idle gap, at least 6918373 ns
+message type 0 "type0"
+  0 "field_0"  enum      8 bits @0 evidence 300 bits
+  1 "field_1"  enum      8 bits @8 evidence 350 bits
+  2 "field_2"  payload   16 bits @16
+  3 "field_4"  constant  8 bits @32 = 0x0 evidence 392 bits
+  4 "field_5"  payload   8 bits @40
+  5 "checksum" checksum  16 bits @48 little-endian covers 0..4 evidence 800 bits CRC-16/MODBUS
+```
+
+It found the frames from the timing alone, the CRC and what it covers, the two
+enumerations (address and function) and the two 16-bit values with nothing to
+find in them. The one cut that is not in the generator's own model is at byte
+5: the high byte of the quantity is always 0, so it comes out as a constant of
+its own, and nothing in the capture says it belongs with the byte after it.
+Random bytes at the same timing come out as one payload field and no checksum;
+without timing there is no framing and it says so.
+
 ## What this does not do yet
 
-The CRC stage is one stage of a longer pipeline (see the
-[roadmap](docs/roadmap.md)). The others are designed and unwritten:
+The first versions of the later stages are in; each is deliberately the
+simplest thing that can work, and each is to be deepened (see the
+[roadmap](docs/roadmap.md)). Today:
 
-- **Frame segmentation.** Right now each frame is a separate file, already
-  cut. Real captures are a byte stream; inter-byte gap timing gives the
-  boundaries on an idle-delimited bus, and where it does not, candidate
-  lengths have to be scored by how much structure each one exposes.
-- **Field discovery.** Per-bit-offset entropy across a corpus of aligned
-  frames separates constants (magic numbers, headers, padding) from payload,
-  and the discontinuities in that profile are the field boundaries.
-- **Field typing.** Once fields are known, classify them by behaviour across
-  the corpus: constant delta between frames is a sequence counter, monotonic
-  with a delta proportional to inter-frame time is a timestamp, correlating
-  with frame length is a length field, small cardinality is an enum.
+- **Frame segmentation** looks only at time: it cuts at the long gaps, and says
+  nothing was found when the gaps do not split into short and long ones. A
+  capture without timestamps, a bus with delimiters or byte stuffing, or one
+  whose frames are told apart by a length field is not segmented yet.
+- **Field discovery** groups frames by size, which is the only notion of
+  message type there is, and works byte by byte: a byte that never changes, one
+  that takes a few values, or one with no visible structure, with a run of the
+  last kind taken as one field. Frames of varying length, message types told
+  apart by a code, and fields smaller than a byte are not handled.
+- **Field typing** claims constants, enumerations and counters, with the
+  evidence for each in bits, and calls everything else payload without
+  claiming anything. Lengths, timestamps, floats, text and flags are not
+  recognised yet, and neither are counters that span bytes which discovery
+  has already cut apart.
 - **Non-byte-aligned checksum fields.** `crc_compute` handles 15-, 17- and
   21-bit widths correctly, and the catalogue includes CAN and CAN-FD. But
   *locating* such a field in a capture needs bit-level framing, so

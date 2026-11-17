@@ -1,0 +1,4 @@
+# Ownership annotations for bridgefex (see docs/roadmap.md, "Related projects").
+# find_protocol returns a pointer into the registry, which keeps owning it.
+[bw_find_protocol]
+return = "borrowed"
