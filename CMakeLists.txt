@@ -46,7 +46,9 @@ add_library(bw_core STATIC
     src/crc.cpp
     src/catalog.cpp
     src/crc_search.cpp
-    src/capture.cpp)
+    src/capture.cpp
+    src/model.cpp
+    src/evaluate.cpp)
 add_library(bw::core ALIAS bw_core)
 set_target_properties(bw_core PROPERTIES EXPORT_NAME core)
 target_include_directories(bw_core PUBLIC
@@ -117,7 +119,9 @@ if(BW_BUILD_TESTS)
         tests/main.cpp
         tests/test_crc.cpp
         tests/test_crc_search.cpp
-        tests/test_capture.cpp)
+        tests/test_capture.cpp
+        tests/test_model.cpp
+        tests/test_evaluate.cpp)
     target_include_directories(bw_tests PRIVATE tests/third_party)
     target_compile_definitions(bw_tests PRIVATE
         "BW_CORPUS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus\"")

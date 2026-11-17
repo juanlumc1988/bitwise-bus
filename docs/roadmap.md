@@ -112,8 +112,9 @@ Every stage starts as the simplest thing that can work:
 | 6 export | Kaitai Struct. |
 
 It also brings the pieces that are not stages: the model type, a Modbus RTU
-generator, a first parametric generator, the evaluation harness and
-`bitwise analyze`.
+generator, the evaluation harness and `bitwise analyze`. The parametric
+generator waits for the first deepening step: the skeleton needs one protocol,
+not a family of them.
 
 **Done when** `bitwise analyze` on synthetic Modbus RTU captures recovers the
 framing, the checksum and the field boundaries of the generator's model, and
@@ -209,14 +210,15 @@ later, and several will lean on code written for Track A.
   files. `main` stays green and releasable after every merge. A stage stays
   behind its interface until it is wired in, so unfinished work never reaches
   the command line.
-- **The skeleton is four pull requests,** along its seams. It was three until
-  the size limit above said otherwise:
+- **The skeleton is five pull requests,** along its seams. It was three until
+  the size limit above said otherwise, then four:
   1. the capture model and its file format (done: see
      [capture-format.md](capture-format.md));
-  2. the model type, the protocol registry, the first generators and the
-     evaluation harness: the rest of the test infrastructure;
-  3. the skeleton stages and `bitwise analyze`;
-  4. the Kaitai exporter, round-trip checking, a README demo and a release.
+  2. the model type and the evaluation harness (done: `bw/model.h` and
+     `bw/evaluate.h`);
+  3. the protocol registry, the Modbus RTU generator and `bitwise synth`;
+  4. the skeleton stages and `bitwise analyze`;
+  5. the Kaitai exporter, round-trip checking, a README demo and a release.
 - **Deepening** is one pull request per stage per wave of protocols, each with
   its corpus additions and the new metrics baseline. **Track B** is one pull
   request per feature, or a short series for the large ones.
@@ -336,10 +338,11 @@ learn where they failed, so the corpus can contain those cases.
 
 ## Open questions
 
-The neutral capture format is no longer one: it is specified in
-[capture-format.md](capture-format.md).
+Two are no longer open. The neutral capture format is specified in
+[capture-format.md](capture-format.md). Evidence is a count of bits, as it
+already is in the CRC stage: `FieldInfo::evidence_bits` in `bw/model.h`, left at
+0 in a ground truth.
 
-- How evidence is represented across stages: bits, probabilities, or both.
 - How alternatives are carried between stages without the cost exploding.
 - Whether a model has its own serialisation, for storing an inference and
   diffing it against a ground truth.

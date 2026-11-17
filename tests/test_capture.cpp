@@ -10,8 +10,9 @@
 #include "doctest.h"
 
 #include <cstdint>
-#include <cstdio>
+#include <fstream>
 #include <initializer_list>
+#include <iterator>
 #include <limits>
 #include <string>
 #include <vector>
@@ -522,17 +523,9 @@ TEST_CASE("statistics: an interval wider than the signed range does not overflow
 
 TEST_CASE("the checked-in Modbus capture holds two frames whose CRC the search finds") {
     const std::string path = std::string(BW_CORPUS_DIR) + "/modbus_rtu_two_requests.csv";
-    std::string text;
-    {
-        std::FILE* f = std::fopen(path.c_str(), "rb");
-        REQUIRE_MESSAGE(f != nullptr, "cannot open " << path);
-        char        buffer[1024];
-        std::size_t n;
-        while ((n = std::fread(buffer, 1, sizeof(buffer), f)) > 0) {
-            text.append(buffer, n);
-        }
-        std::fclose(f);
-    }
+    std::ifstream in(path.c_str(), std::ios::binary);
+    REQUIRE_MESSAGE(in.good(), "cannot open " << path);
+    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     const Capture capture = bw::parse_capture_csv(text);
     REQUIRE(capture.event_count() == 16);
     CHECK(capture.fully_timed());
