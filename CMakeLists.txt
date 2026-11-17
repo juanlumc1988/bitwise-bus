@@ -48,7 +48,10 @@ add_library(bw_core STATIC
     src/crc_search.cpp
     src/capture.cpp
     src/model.cpp
-    src/evaluate.cpp)
+    src/evaluate.cpp
+    src/dataset.cpp
+    src/protocol.cpp
+    src/protocols/modbus_rtu.cpp)
 add_library(bw::core ALIAS bw_core)
 set_target_properties(bw_core PROPERTIES EXPORT_NAME core)
 target_include_directories(bw_core PUBLIC
@@ -121,7 +124,9 @@ if(BW_BUILD_TESTS)
         tests/test_crc_search.cpp
         tests/test_capture.cpp
         tests/test_model.cpp
-        tests/test_evaluate.cpp)
+        tests/test_evaluate.cpp
+        tests/test_dataset.cpp
+        tests/test_protocol.cpp)
     target_include_directories(bw_tests PRIVATE tests/third_party)
     target_compile_definitions(bw_tests PRIVATE
         "BW_CORPUS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus\"")
@@ -137,4 +142,22 @@ if(BW_BUILD_TESTS)
         COMMAND bitwise capture-info ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/modbus_rtu_two_requests.csv)
     set_tests_properties(cli_capture_info PROPERTIES PASS_REGULAR_EXPRESSION
         "events +16 \\(16 bytes\\).*channels +1: rs485 \\(16\\).*intervals +15 between timed events: min 1145833 ns, median 1145833 ns, max 11145833 ns")
+
+    # Each of these reads the output of the real program. A pattern only has to say
+    # that the right thing came out; the exact bytes are checked by the unit tests.
+    add_test(NAME cli_protocols COMMAND bitwise protocols)
+    set_tests_properties(cli_protocols PROPERTIES PASS_REGULAR_EXPRESSION
+        "modbus-rtu +Modbus RTU requests")
+    add_test(NAME cli_protocols_model COMMAND bitwise protocols modbus-rtu)
+    set_tests_properties(cli_protocols_model PROPERTIES PASS_REGULAR_EXPRESSION
+        "framing: idle gap, at least 4010415 ns.*4 \"crc\" +checksum +16 bits @48 little-endian covers 0..3 CRC-16/MODBUS")
+    add_test(NAME cli_synth COMMAND bitwise synth modbus-rtu --seed 1 --frames 3)
+    set_tests_properties(cli_synth PROPERTIES PASS_REGULAR_EXPRESSION
+        "# bitwise-capture 1.*time_ns,channel,direction,id,data.*0,rs485,,,03.*1145833,rs485,,,04")
+    add_test(NAME cli_synth_unknown COMMAND bitwise synth nope)
+    set_tests_properties(cli_synth_unknown PROPERTIES PASS_REGULAR_EXPRESSION
+        "unknown protocol 'nope'; known: modbus-rtu")
+    add_test(NAME cli_synth_bad_number COMMAND bitwise synth modbus-rtu --frames 100001)
+    set_tests_properties(cli_synth_bad_number PROPERTIES PASS_REGULAR_EXPRESSION
+        "--frames: '100001' is not a whole number from 0 to 100000")
 endif()

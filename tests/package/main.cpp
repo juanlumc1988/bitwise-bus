@@ -3,8 +3,8 @@
 //
 // Link check for the installed package: two real Modbus RTU requests go in,
 // CRC-16/MODBUS, whole frame, little-endian has to come out. A one-line capture
-// is read as well, and a model is built and scored, so that the capture, model and
-// evaluation headers are checked as C++11 and linked.
+// is read as well, a model is built and scored, and a synthetic capture is made, so that
+// the capture, model, evaluation and protocol headers are checked as C++11 and linked.
 
 #include <cstdio>
 #include <cstring>
@@ -14,6 +14,7 @@
 #include "bw/crc_search.h"
 #include "bw/evaluate.h"
 #include "bw/model.h"
+#include "bw/protocol.h"
 
 int main() {
     static const bw::u8 a[] = {0x01, 0x03, 0x00, 0x00, 0x00, 0x0A, 0xC5, 0xCD};
@@ -39,6 +40,15 @@ int main() {
     const bw::FieldScore score = bw::score_fields(model, type, model, type);
     if (score.exact_fields != 1 || !score.checksum_match) {
         std::fprintf(stderr, "the packaged model and evaluation code scored the wrong thing\n");
+        return 1;
+    }
+
+    // A generator is in the package too, and runs.
+    bw::GenerateOptions generate;
+    generate.frames = 2;
+    const bw::Dataset dataset = bw::generate_protocol("modbus-rtu", generate);
+    if (dataset.frame_count() != 2 || dataset.capture().event_count() != 16) {
+        std::fprintf(stderr, "the packaged generator made the wrong capture\n");
         return 1;
     }
 

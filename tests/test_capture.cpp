@@ -9,6 +9,7 @@
 
 #include "doctest.h"
 
+#include <chrono>
 #include <cstdint>
 #include <fstream>
 #include <initializer_list>
@@ -459,6 +460,31 @@ TEST_CASE("any capture survives a round trip, and writing it again changes nothi
         CHECK(back.equals(original));
         CHECK(bw::format_capture_csv(back) == text);
     }
+}
+
+// ---- Size ------------------------------------------------------------------
+
+TEST_CASE("a large capture is built, written and read in time proportional to its size") {
+    // Building a capture once took time proportional to the square of its size:
+    // 100000 events took thirty-five seconds. A bound this loose is not about
+    // speed; linear code is far inside it and quadratic code is far outside.
+    const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+
+    Capture capture;
+    EventInfo info;
+    info.has_time = true;
+    for (int i = 0; i < 50000; ++i) {
+        info.time_ns = i;
+        capture.add_event(info, bytes_of({i & 0xFF}));
+    }
+    const std::string text = bw::format_capture_csv(capture);
+    const Capture back     = bw::parse_capture_csv(text);
+
+    const long long elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start).count();
+    CHECK(back.event_count() == 50000);
+    CHECK(back.equals(capture));
+    CHECK_MESSAGE(elapsed_ms < 5000, "took " << elapsed_ms << " ms");
 }
 
 // ---- Statistics ------------------------------------------------------------

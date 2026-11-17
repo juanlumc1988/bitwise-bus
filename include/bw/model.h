@@ -36,7 +36,10 @@ namespace bw {
 // segmentation stage.
 enum class FramingKind : std::uint8_t {
     Unknown = 0,
-    IdleGap = 1,        // a pause of at least idle_gap_ns ends a frame
+    IdleGap = 1,        // two consecutive events whose timestamps are at least
+                        //   idle_gap_ns apart are in different frames. Timestamps
+                        //   are when an event started and its duration is not
+                        //   recorded, so this is all a capture can say.
     ByEvent = 2         // each event is a frame: a CAN frame, say
 };
 
