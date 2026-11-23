@@ -272,25 +272,31 @@ later, and several will lean on code written for Track A.
   3. SLIP and HDLC/PPP (byte stuffing: the model describes the frame as it is
      once the stuffing is taken out; done: `src/protocols/slip.cpp` and
      `src/protocols/hdlc_ppp.cpp`);
-  4. stage 3, in three steps. (a) Frames bounded by a flag on both sides, which
-     is what SLIP and HDLC have (done: `segment_by_flags` in `bw/segmentation.h`).
-     (b) Frames that start with a sync byte and say their length, which is what UBX
-     and MAVLink have (done: `segment_by_sync`): from a sync byte the stage follows
-     the chain, from where each length says a frame ends to the next sync byte, and
-     it is the framing when the chain covers the capture with almost no break. A
-     sync byte that happens to occur inside a payload breaks nothing, and the
-     length is the evidence that tells where a frame starts: UBX is found at 0xB5
-     and not at the 0x62 after it, which makes as many frames, each shifted: a frame
-     starts where the byte before it stops being the same. The
-     pipeline cuts by flags if the capture has them, by gaps if it has them, and by
-     sync bytes and lengths if not, or where they cut the gaps' frames finer.
-     (c) Frames cut by a terminator, or by a flag that two frames share (the usual
-     HDLC), with a checksum that validates a cut as evidence for it. These are still
-     ambiguous, because a byte that occurs once in each frame cuts it somewhere and
-     the bytes alone do not say whether that is its end, its start or its middle: on
-     200 NMEA sentences a line feed, a carriage return, `$` and `P` all make 200
-     frames, and the sync bytes and lengths do not apply, since sentences have no
-     length. What can settle it is for the next step to find out;
+  4. stage 3, in three steps, all done. (a) Frames bounded by a flag on both sides,
+     which is what SLIP and HDLC have (`segment_by_flags` in `bw/segmentation.h`).
+     (b) Frames that start with a sync byte and say their length, which is what
+     UBX and MAVLink have (`segment_by_sync`): from a sync byte the stage follows
+     the chain, from where each length says a frame ends to the next sync byte,
+     and it is the framing when the chain covers the capture with almost no break.
+     A sync byte that happens to occur inside a payload breaks nothing, and a frame
+     starts where the byte before it stops being the same: UBX is found at 0xB5 and
+     not at the 0x62 after it, which makes as many frames, each shifted. (c) What
+     was left: a terminator and a flag that two frames share, which are, in the
+     bytes, a byte that occurs once in each frame, and such a byte cuts the frame
+     somewhere that the bytes alone do not tell: on 200 NMEA sentences a line feed,
+     a carriage return, `$` and `P` all make 200 frames, and on shared-flag HDLC
+     `0x7E`, `0xFF` and `0x03` do. Two pieces of evidence settle them. A flag is a
+     flag when the capture shows its stuffing: an escape byte that is always
+     followed by one of two codes, both seen (the two ways known are RFC 1662's, the
+     flag and the escape with bit 5 flipped, and SLIP's C0 DB DC DD), which a
+     capture of text does not have, whatever its carriage returns and line feeds
+     (a line feed is the star with bit 5 flipped, and one of the two codes is not
+     enough: a first version took the star of an NMEA capture for a flag). The model
+     gets the escape and its codes. And text is cut in lines, which end with a line
+     feed with the carriage return before it, by convention: a terminator of
+     another kind (an ETX, a NUL after binary data) is not found. The pipeline cuts
+     by flags if the capture has them, by gaps if it has them, and by a sync byte
+     and a length or by lines if not, or where they cut the gaps' frames finer;
   5. stage 2: Fletcher-8, a CRC with a hidden seed byte, checksums written as
      text, CRC-16/X-25 (the catalogue does not have it, and it is the FCS of HDLC,
      PPP and X.25), and a CRC over the bytes once stuffing is taken out;
@@ -342,8 +348,11 @@ types of them; no checksum.
 NMEA 0183 is of another kind and has its own baseline, on 90 sentences of
 seed 3: by gaps, 30 frames are found where there are 90, none of them a true
 sentence (they are the seconds, three sentences each), and every cut it makes is
-a real one, so 31 of the 91 true boundaries are hit. With the true sentences
-given, the stages group them by size, and the sentences of two kinds share
+a real one, so 31 of the 91 true boundaries are hit. By lines, which is what the
+pipeline cuts text into, every sentence is found and only them: 200 of 200 on
+seeds 1 to 4, and the pipeline takes the lines over the gaps because they cut at
+every place the gaps do and in more. With the true sentences given, or the ones
+found, the stages group them by size, and the sentences of two kinds share
 sizes: they make seven message types where there are three, none with a checksum
 (it is an exclusive or, written as text). Scoring the fields of a sentence needs
 the harness to place fields that have no fixed place, which is part of stage 4.
@@ -496,6 +505,15 @@ the reason the README gives for `rewind-mcu`.
   byte, the offset of the length and what is added to it), the model's framing is
   `FramingKind.Contiguous`, `describe_analysis` prints the same line as the CLI,
   SLIP and PPP are still cut by their flags, and Modbus RTU by its gaps.
+
+  **After the stuffing and the lines of stage 3** (`segment_by_lines`, one more
+  option and four more fields in `SegmentationInfo`) it was the same once more:
+  the same 45 files, no change to the headers or the annotations. From Python, 24
+  checks pass: the stuffing of SLIP and PPP (the escape and its two codes) in the
+  info of the segmentation and in the model's framing, the sentences of NMEA cut
+  by lines where the gaps find the seconds (the 90 true sentences, the byte, the
+  count), `FramingKind.Terminated` as an enum, the line of `describe_analysis`, and
+  UBX, MAVLink and Modbus RTU as before.
 
   Not tried: any platform other than Linux x86-64, threads, callbacks and
   directors, large captures, Python versions other than 3.13. To repeat the

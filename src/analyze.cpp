@@ -166,6 +166,15 @@ Analysis analyze_frames(const Capture& capture, const Segmentation& segmentation
     if (info.segmentation.kind == FramingKind::Flagged) {
         framing.kind      = FramingKind::Flagged;
         framing.delimiter = info.segmentation.delimiter;
+        if (info.segmentation.escaped) {
+            framing.escaped        = true;
+            framing.escape         = info.segmentation.escape;
+            framing.delimiter_code = info.segmentation.delimiter_code;
+            framing.escape_code    = info.segmentation.escape_code;
+        }
+    } else if (info.segmentation.kind == FramingKind::Terminated) {
+        framing.kind      = FramingKind::Terminated;
+        framing.delimiter = info.segmentation.delimiter;
     } else if (info.segmentation.kind == FramingKind::Contiguous) {
         framing.kind = FramingKind::Contiguous;
     } else if (info.segmentation.idle_gap_ns != 0) {
@@ -201,7 +210,7 @@ std::string describe_analysis(const Analysis& analysis) {
     const SegmentationInfo& seg = info.segmentation;
     if (!seg.found) {
         out += "framing    none found: the gaps between events do not split into short and long ones, "
-               "no byte bounds the frames as a flag, and none starts them and says how long they are\n";
+               "no byte bounds the frames as a flag, none starts them and says how long they are, and it is not text in lines\n";
         return out + describe_model(analysis.model());
     }
     if (seg.kind == FramingKind::Contiguous) {
@@ -216,9 +225,17 @@ std::string describe_analysis(const Analysis& analysis) {
                                           : " minus " + number(static_cast<std::uint64_t>(-static_cast<std::int64_t>(seg.length_adjust)));
         }
         out += " (" + number(seg.breaks) + (seg.breaks == 1 ? " break" : " breaks") + " in the chain)\n";
+    } else if (seg.kind == FramingKind::Terminated) {
+        out += "framing    lines: each frame ends with the byte " + hex_byte(seg.delimiter) + " (" + number(seg.flags) +
+               " of them in the capture)\n";
     } else if (seg.kind == FramingKind::Flagged) {
         out += "framing    flags: the byte " + hex_byte(seg.delimiter) + " bounds each frame (" + number(seg.flags) +
-               " of them in the capture)\n";
+               " of them in the capture)";
+        if (seg.escaped) {
+            out += ", stuffed: " + hex_byte(seg.delimiter) + " as " + hex_byte(seg.escape) + " " + hex_byte(seg.delimiter_code) +
+                   " and " + hex_byte(seg.escape) + " as " + hex_byte(seg.escape) + " " + hex_byte(seg.escape_code);
+        }
+        out += "\n";
     } else if (seg.idle_gap_ns == 0) {
         out += "framing    not looked for: the frames were given\n";
     } else {

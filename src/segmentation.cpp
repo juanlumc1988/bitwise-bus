@@ -173,19 +173,14 @@ std::vector<FrameSpan> frames_between_flags(const std::vector<std::uint8_t>& byt
     return frames;
 }
 
-// Does `flag` bound frames as a flag does? Fills `frames` with them when it does.
-bool bounds_frames(const std::vector<std::uint8_t>& bytes, std::uint8_t flag, std::uint32_t min_frames,
-                   std::vector<FrameSpan>* frames) {
-    *frames = frames_between_flags(bytes, flag);
-    if (frames->empty() || frames->size() < min_frames) {
-        return false;
-    }
-
-    // The byte after the opening flag: a few values, nearly always.
+// Do these frames look like the frames of a protocol? They start with one of a few bytes, nearly always
+// (after the flag, for the frames of a flag: `flag` is the byte to skip, or more than 255 for none), and
+// are about the same size, nearly always.
+bool regular_frames(const std::vector<std::uint8_t>& bytes, const std::vector<FrameSpan>& frames, unsigned flag) {
     std::vector<std::uint64_t> starts(256, 0);
     std::vector<std::uint64_t> sizes;
-    for (std::size_t i = 0; i < frames->size(); ++i) {
-        const FrameSpan&    f     = (*frames)[i];
+    for (std::size_t i = 0; i < frames.size(); ++i) {
+        const FrameSpan&    f     = frames[i];
         const std::uint64_t first = f.first_event + (bytes[f.first_event] == flag ? 1 : 0);
         ++starts[bytes[first]];
         sizes.push_back(f.event_count);
@@ -195,11 +190,10 @@ bool bounds_frames(const std::vector<std::uint8_t>& bytes, std::uint8_t flag, st
     for (std::size_t k = 0; k < 4; ++k) {
         top += starts[255 - k];
     }
-    if (top * 100 < 95 * frames->size()) {
+    if (top * 100 < 95 * frames.size()) {
         return false;
     }
 
-    // And about the same size, nearly always.
     std::sort(sizes.begin(), sizes.end());
     const std::uint64_t median = sizes[sizes.size() / 2];
     std::uint64_t       alike  = 0;
@@ -207,6 +201,54 @@ bool bounds_frames(const std::vector<std::uint8_t>& bytes, std::uint8_t flag, st
         alike += (sizes[i] * 4 >= median && sizes[i] <= 4 * median) ? 1 : 0;
     }
     return alike * 100 >= 95 * sizes.size();
+}
+
+// Does `flag` bound frames as a flag does? Fills `frames` with them when it does.
+bool bounds_frames(const std::vector<std::uint8_t>& bytes, std::uint8_t flag, std::uint32_t min_frames,
+                   std::vector<FrameSpan>* frames) {
+    *frames = frames_between_flags(bytes, flag);
+    if (frames->empty() || frames->size() < min_frames) {
+        return false;
+    }
+    return regular_frames(bytes, *frames, flag);
+}
+
+// How the stuffing of a flag is written, if the capture shows it: an escape byte that is followed, every
+// time, by one of two codes, both of which the capture has. There are two ways known: the codes are the flag and the escape with bit 5
+// flipped (RFC 1662, HDLC), or the flag is C0 and the escape DB and the codes DC and DD (RFC 1055, SLIP).
+// `after` counts the pairs of bytes in a row and `followed` the bytes that have one after them.
+struct Stuffing {
+    bool         found       = false;
+    std::uint8_t escape      = 0;
+    std::uint8_t flag_code   = 0;
+    std::uint8_t escape_code = 0;
+};
+
+Stuffing find_stuffing(const std::vector<std::uint32_t>& after, const std::vector<std::uint64_t>& followed,
+                       std::uint8_t flag) {
+    Stuffing      best;
+    std::uint64_t best_seen = 0;
+    for (unsigned e = 0; e < 256; ++e) {
+        for (unsigned family = 0; family < 2; ++family) {
+            if (family == 1 && (flag != 0xC0 || e != 0xDB)) {
+                continue;
+            }
+            const std::uint8_t  flag_code   = family == 0 ? static_cast<std::uint8_t>(flag ^ 0x20) : 0xDC;
+            const std::uint8_t  escape_code = family == 0 ? static_cast<std::uint8_t>(e ^ 0x20) : 0xDD;
+            // Both codes have to be there: one that always follows another byte is common (a line feed after a
+            // carriage return is the flag 0x2A with its bit 5 flipped), and two are not.
+            const std::uint64_t seen        = static_cast<std::uint64_t>(after[e * 256 + flag_code]) + after[e * 256 + escape_code];
+            if (after[e * 256 + flag_code] > 0 && after[e * 256 + escape_code] > 0 && seen >= 3 && seen == followed[e] &&
+                seen > best_seen) {
+                best.found       = true;
+                best.escape      = static_cast<std::uint8_t>(e);
+                best.flag_code   = flag_code;
+                best.escape_code = escape_code;
+                best_seen        = seen;
+            }
+        }
+    }
+    return best;
 }
 
 } // namespace
@@ -217,26 +259,38 @@ Segmentation segment_by_flags(const Capture& capture, const SegmentationOptions&
         return Segmentation();
     }
 
-    // Only a byte that is followed by itself often enough is worth cutting at.
-    std::vector<std::uint64_t> count(256, 0), twice(256, 0);
+    // How often each byte occurs, followed by itself, and followed by each other byte.
+    std::vector<std::uint64_t> count(256, 0), twice(256, 0), followed(256, 0);
+    std::vector<std::uint32_t> after(256 * 256, 0);
     for (std::size_t i = 0; i < bytes.size(); ++i) {
         ++count[bytes[i]];
-        if (i + 1 < bytes.size() && bytes[i + 1] == bytes[i]) {
-            ++twice[bytes[i]];
+        if (i + 1 < bytes.size()) {
+            ++after[bytes[i] * 256u + bytes[i + 1]];
+            ++followed[bytes[i]];
+            if (bytes[i + 1] == bytes[i]) {
+                ++twice[bytes[i]];
+            }
         }
     }
     bool                   found = false;
     std::uint8_t           flag  = 0;
+    Stuffing               stuffing;
     std::vector<FrameSpan> best;
     for (unsigned b = 0; b < 256; ++b) {
-        if (count[b] == 0 || 4 * twice[b] < count[b]) {
+        if (count[b] == 0) {
+            continue;
+        }
+        // Only a byte that is followed by itself often enough, or that has stuffing, is worth cutting at.
+        const Stuffing candidate = find_stuffing(after, followed, static_cast<std::uint8_t>(b));
+        if (4 * twice[b] < count[b] && !candidate.found) {
             continue;
         }
         std::vector<FrameSpan> frames;
         if (bounds_frames(bytes, static_cast<std::uint8_t>(b), options.min_flag_frames, &frames) &&
             (!found || frames.size() > best.size())) {
-            found = true;
-            flag  = static_cast<std::uint8_t>(b);
+            found    = true;
+            flag     = static_cast<std::uint8_t>(b);
+            stuffing = candidate;
             best.swap(frames);
         }
     }
@@ -244,10 +298,14 @@ Segmentation segment_by_flags(const Capture& capture, const SegmentationOptions&
         return Segmentation();
     }
     SegmentationInfo info;
-    info.found     = true;
-    info.kind      = FramingKind::Flagged;
-    info.delimiter = flag;
-    info.flags     = count[flag];
+    info.found          = true;
+    info.kind           = FramingKind::Flagged;
+    info.delimiter      = flag;
+    info.flags          = count[flag];
+    info.escaped        = stuffing.found;
+    info.escape         = stuffing.escape;
+    info.delimiter_code = stuffing.flag_code;
+    info.escape_code    = stuffing.escape_code;
     return Segmentation(info, best);
 }
 
@@ -443,6 +501,43 @@ Segmentation segment_by_sync(const Capture& capture, const SegmentationOptions& 
     return Segmentation(info, best_chain.frames);
 }
 
+Segmentation segment_by_lines(const Capture& capture, const SegmentationOptions& options) {
+    std::vector<std::uint8_t> bytes;
+    if (!single_bytes(capture, &bytes)) {
+        return Segmentation();
+    }
+    std::uint64_t text = 0, feeds = 0;
+    for (std::size_t i = 0; i < bytes.size(); ++i) {
+        const std::uint8_t b = bytes[i];
+        text += ((b >= 0x20 && b <= 0x7E) || b == 0x09 || b == 0x0D || b == 0x0A) ? 1 : 0;
+        feeds += b == 0x0A ? 1 : 0;
+    }
+    if (text * 100 < 95 * bytes.size()) {
+        return Segmentation();
+    }
+
+    std::vector<FrameSpan> frames;
+    std::uint64_t          start = 0;
+    for (std::uint64_t i = 0; i < bytes.size(); ++i) {
+        if (bytes[i] == 0x0A) {
+            const bool empty = i == start || (i == start + 1 && bytes[start] == 0x0D);
+            if (!empty) {
+                frames.push_back(span(start, i + 1 - start));
+            }
+            start = i + 1;
+        }
+    }
+    if (frames.empty() || frames.size() < options.min_line_frames || !regular_frames(bytes, frames, 256)) {
+        return Segmentation();
+    }
+    SegmentationInfo info;
+    info.found     = true;
+    info.kind      = FramingKind::Terminated;
+    info.delimiter = 0x0A;
+    info.flags     = feeds;
+    return Segmentation(info, frames);
+}
+
 namespace {
 
 // Does `fine` cut at every place inside the capture where `coarse` does, and in more places? The frames of
@@ -476,15 +571,17 @@ Segmentation segment_frames(const Capture& capture, const SegmentationOptions& o
     if (flagged.info().found) {
         return flagged;
     }
-    const Segmentation gaps = segment_by_gaps(capture, options);
-    const Segmentation sync = segment_by_sync(capture, options);
-    if (!sync.info().found) {
+    const Segmentation gaps  = segment_by_gaps(capture, options);
+    const Segmentation sync  = segment_by_sync(capture, options);
+    const Segmentation lines = sync.info().found ? Segmentation() : segment_by_lines(capture, options);
+    const Segmentation& fine = sync.info().found ? sync : lines;
+    if (!fine.info().found) {
         return gaps;
     }
-    // Where there are gaps they are the better evidence, unless the sync bytes and lengths cut the same
-    // frames and more (a burst of frames with silence only after the last): then the finer cut is the frames.
-    if (!gaps.info().found || refines(sync, gaps, capture.event_count())) {
-        return sync;
+    // Where there are gaps they are the better evidence, unless the sync bytes and lengths, or the lines, cut the
+    // same frames and more (a burst of frames with silence only after the last): then the finer cut is the frames.
+    if (!gaps.info().found || refines(fine, gaps, capture.event_count())) {
+        return fine;
     }
     return gaps;
 }

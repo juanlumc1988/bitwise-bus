@@ -307,10 +307,11 @@ checksums (Fletcher-8, a CRC with a seed that is not in the frame, and for PPP a
 not in the catalogue, over bytes as they were before the stuffing), the frames of MAVLink 2
 that differ in length for the same message because the zeros at the end of a payload are not
 sent, and, for SLIP and PPP, a flag or an escape in the data that costs a byte more. NMEA
-sentences differ in length and come three at a time with a second of silence after them, so
-the gaps find the seconds and not the sentences, and the exclusive-or checksum is written as
-two hexadecimal characters. That is the starting point of the next steps of the
-[roadmap](docs/roadmap.md), measured in its table of the baseline.
+sentences are text, and come three at a time with a second of silence after them: the gaps
+find the seconds, and `analyze` cuts them into lines, which are the sentences; they differ in
+length, and the exclusive-or checksum is written as two hexadecimal characters. That is the
+starting point of the next steps of the [roadmap](docs/roadmap.md), measured in its table of
+the baseline.
 
 ## What this does not do yet
 
