@@ -109,6 +109,7 @@ Segmentation segment_by_gaps(const Capture& capture, const SegmentationOptions& 
 
     SegmentationInfo info;
     info.found       = true;
+    info.kind        = FramingKind::IdleGap;
     info.idle_gap_ns = best_hi;
     for (std::size_t i = 0; i < gaps.size(); ++i) {
         if (gaps[i] >= best_hi) {
@@ -129,6 +130,116 @@ Segmentation segment_by_gaps(const Capture& capture, const SegmentationOptions& 
     }
     frames.push_back(span(start, events - start));
     return Segmentation(info, frames);
+}
+
+namespace {
+
+// The frames that the byte `flag` bounds, in the order they are in the stream, from a flag to the
+// next one that has something between them and the one before it.
+std::vector<FrameSpan> frames_between_flags(const std::vector<std::uint8_t>& bytes, std::uint8_t flag) {
+    std::vector<std::uint64_t> at;
+    for (std::size_t i = 0; i < bytes.size(); ++i) {
+        if (bytes[i] == flag) {
+            at.push_back(i);
+        }
+    }
+    std::vector<FrameSpan> frames;
+    std::uint64_t          free_from = 0;               // a shared flag is the first frame's
+    for (std::size_t k = 0; k + 1 < at.size(); ++k) {
+        if (at[k + 1] - at[k] > 1) {
+            const std::uint64_t first = std::max(at[k], free_from);
+            frames.push_back(span(first, at[k + 1] + 1 - first));
+            free_from = at[k + 1] + 1;
+        }
+    }
+    return frames;
+}
+
+// Does `flag` bound frames as a flag does? Fills `frames` with them when it does.
+bool bounds_frames(const std::vector<std::uint8_t>& bytes, std::uint8_t flag, std::uint32_t min_frames,
+                   std::vector<FrameSpan>* frames) {
+    *frames = frames_between_flags(bytes, flag);
+    if (frames->empty() || frames->size() < min_frames) {
+        return false;
+    }
+
+    // The byte after the opening flag: a few values, nearly always.
+    std::vector<std::uint64_t> starts(256, 0);
+    std::vector<std::uint64_t> sizes;
+    for (std::size_t i = 0; i < frames->size(); ++i) {
+        const FrameSpan&    f     = (*frames)[i];
+        const std::uint64_t first = f.first_event + (bytes[f.first_event] == flag ? 1 : 0);
+        ++starts[bytes[first]];
+        sizes.push_back(f.event_count);
+    }
+    std::sort(starts.begin(), starts.end());
+    std::uint64_t top = 0;
+    for (std::size_t k = 0; k < 4; ++k) {
+        top += starts[255 - k];
+    }
+    if (top * 100 < 95 * frames->size()) {
+        return false;
+    }
+
+    // And about the same size, nearly always.
+    std::sort(sizes.begin(), sizes.end());
+    const std::uint64_t median = sizes[sizes.size() / 2];
+    std::uint64_t       alike  = 0;
+    for (std::size_t i = 0; i < sizes.size(); ++i) {
+        alike += (sizes[i] * 4 >= median && sizes[i] <= 4 * median) ? 1 : 0;
+    }
+    return alike * 100 >= 95 * sizes.size();
+}
+
+} // namespace
+
+Segmentation segment_by_flags(const Capture& capture, const SegmentationOptions& options) {
+    std::vector<std::uint8_t> bytes;
+    bytes.reserve(capture.event_count());
+    for (std::size_t i = 0; i < capture.event_count(); ++i) {
+        if (capture.event_size(i) != 1) {
+            return Segmentation();
+        }
+        bytes.push_back(capture.event_bytes(i)[0]);
+    }
+
+    // Only a byte that is followed by itself often enough is worth cutting at.
+    std::vector<std::uint64_t> count(256, 0), twice(256, 0);
+    for (std::size_t i = 0; i < bytes.size(); ++i) {
+        ++count[bytes[i]];
+        if (i + 1 < bytes.size() && bytes[i + 1] == bytes[i]) {
+            ++twice[bytes[i]];
+        }
+    }
+    bool                   found = false;
+    std::uint8_t           flag  = 0;
+    std::vector<FrameSpan> best;
+    for (unsigned b = 0; b < 256; ++b) {
+        if (count[b] == 0 || 4 * twice[b] < count[b]) {
+            continue;
+        }
+        std::vector<FrameSpan> frames;
+        if (bounds_frames(bytes, static_cast<std::uint8_t>(b), options.min_flag_frames, &frames) &&
+            (!found || frames.size() > best.size())) {
+            found = true;
+            flag  = static_cast<std::uint8_t>(b);
+            best.swap(frames);
+        }
+    }
+    if (!found) {
+        return Segmentation();
+    }
+    SegmentationInfo info;
+    info.found     = true;
+    info.kind      = FramingKind::Flagged;
+    info.delimiter = flag;
+    info.flags     = count[flag];
+    return Segmentation(info, best);
+}
+
+Segmentation segment_frames(const Capture& capture, const SegmentationOptions& options) {
+    const Segmentation flagged = segment_by_flags(capture, options);
+    return flagged.info().found ? flagged : segment_by_gaps(capture, options);
 }
 
 std::vector<std::uint8_t> frame_bytes(const Capture& capture, const FrameSpan& frame) {

@@ -65,6 +65,14 @@ void add_fields(Model* model, std::size_t type, const FieldMap& fields,
     }
 }
 
+std::string hex_byte(unsigned value) {
+    static const char digits[] = "0123456789ABCDEF";
+    std::string       out      = "0x";
+    out += digits[(value >> 4) & 15];
+    out += digits[value & 15];
+    return out;
+}
+
 std::string checksum_line(const ChecksumFinding& c) {
     if (c.found) {
         return "checksum " + checksum_algorithm_name(c.algorithm) + ", " + number(c.width_bits) +
@@ -119,7 +127,7 @@ MessageTypeReport Analysis::type_report(std::size_t message_type) const {
 }
 
 Analysis analyze(const Capture& capture, const AnalyzeOptions& options) {
-    return analyze_frames(capture, segment_by_gaps(capture, options.segmentation), options);
+    return analyze_frames(capture, segment_frames(capture, options.segmentation), options);
 }
 
 Analysis analyze_frames(const Capture& capture, const Segmentation& segmentation,
@@ -150,10 +158,15 @@ Analysis analyze_frames(const Capture& capture, const Segmentation& segmentation
     }
     std::sort(types.begin(), types.end(), more_frequent);
 
-    // What cut the frames is known only when it was the gaps.
+    // What cut the frames is known when it was the flags or the gaps. A gap is
+    // never 0 (the segmentation takes the shortest long one), so idle_gap_ns says
+    // it was the gaps, also for a segmentation that has no kind.
     Model model;
     FramingInfo framing;
-    if (info.segmentation.idle_gap_ns != 0) {
+    if (info.segmentation.kind == FramingKind::Flagged) {
+        framing.kind      = FramingKind::Flagged;
+        framing.delimiter = info.segmentation.delimiter;
+    } else if (info.segmentation.idle_gap_ns != 0) {
         framing.kind        = FramingKind::IdleGap;
         framing.idle_gap_ns = info.segmentation.idle_gap_ns;
     }
@@ -185,10 +198,14 @@ std::string describe_analysis(const Analysis& analysis) {
 
     const SegmentationInfo& seg = info.segmentation;
     if (!seg.found) {
-        out += "framing    none found: the gaps between events do not split into short and long ones\n";
+        out += "framing    none found: the gaps between events do not split into short and long ones, "
+               "and no byte bounds the frames as a flag\n";
         return out + describe_model(analysis.model());
     }
-    if (seg.idle_gap_ns == 0) {
+    if (seg.kind == FramingKind::Flagged) {
+        out += "framing    flags: the byte " + hex_byte(seg.delimiter) + " bounds each frame (" + number(seg.flags) +
+               " of them in the capture)\n";
+    } else if (seg.idle_gap_ns == 0) {
         out += "framing    not looked for: the frames were given\n";
     } else {
         out += "framing    idle gap: a gap of at least " + number(seg.idle_gap_ns) + " ns ends a frame (" +

@@ -146,7 +146,8 @@ if(BW_BUILD_TESTS)
         tests/test_ubx_mavlink.cpp
         tests/test_nmea.cpp
         tests/test_mavlink2.cpp
-        tests/test_stuffing.cpp)
+        tests/test_stuffing.cpp
+        tests/test_flags.cpp)
     target_include_directories(bw_tests PRIVATE tests/third_party)
     target_compile_definitions(bw_tests PRIVATE
         "BW_CORPUS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus\""
@@ -227,6 +228,15 @@ if(BW_BUILD_TESTS)
         COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_modbus_rtu_seed1_50frames_jitter300.csv)
     set_tests_properties(cli_analyze PROPERTIES PASS_REGULAR_EXPRESSION
         "idle gap: a gap of at least 6918373 ns ends a frame.*type0 +8 bytes, 50 frames; checksum CRC-16/MODBUS, 16 bits little-endian, evidence 800 bits.*5 \"checksum\" +checksum +16 bits @48 little-endian covers 0..4")
+    # And on the two captures of byte-stuffed protocols, which have no gaps to cut at: the flags.
+    add_test(NAME cli_analyze_slip
+        COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_slip_seed3_30frames.csv)
+    set_tests_properties(cli_analyze_slip PROPERTIES PASS_REGULAR_EXPRESSION
+        "framing +flags: the byte 0xC0 bounds each frame \\(60 of them in the capture\\).*frames +30 \\(3 of a size too rare.*framing: between 0xC0")
+    add_test(NAME cli_analyze_hdlc_ppp
+        COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_hdlc_ppp_seed2_30frames.csv)
+    set_tests_properties(cli_analyze_hdlc_ppp PROPERTIES PASS_REGULAR_EXPRESSION
+        "framing +flags: the byte 0x7E bounds each frame \\(90 of them in the capture\\).*frames +30 \\(2 of a size too rare.*framing: between 0x7E")
     add_test(NAME cli_analyze_option
         COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_modbus_rtu_seed1_50frames_jitter300.csv
                 --min-frames 51)
