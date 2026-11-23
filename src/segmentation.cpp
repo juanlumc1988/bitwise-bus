@@ -4,7 +4,12 @@
 #include "bw/segmentation.h"
 
 #include <algorithm>
+#include <bitset>
+#include <functional>
+#include <limits>
+#include <map>
 #include <stdexcept>
+#include <utility>
 
 namespace bw {
 
@@ -134,6 +139,19 @@ Segmentation segment_by_gaps(const Capture& capture, const SegmentationOptions& 
 
 namespace {
 
+// The bytes of a capture whose events are one byte each, in order; false if one is not.
+bool single_bytes(const Capture& capture, std::vector<std::uint8_t>* bytes) {
+    bytes->clear();
+    bytes->reserve(capture.event_count());
+    for (std::size_t i = 0; i < capture.event_count(); ++i) {
+        if (capture.event_size(i) != 1) {
+            return false;
+        }
+        bytes->push_back(capture.event_bytes(i)[0]);
+    }
+    return true;
+}
+
 // The frames that the byte `flag` bounds, in the order they are in the stream, from a flag to the
 // next one that has something between them and the one before it.
 std::vector<FrameSpan> frames_between_flags(const std::vector<std::uint8_t>& bytes, std::uint8_t flag) {
@@ -195,12 +213,8 @@ bool bounds_frames(const std::vector<std::uint8_t>& bytes, std::uint8_t flag, st
 
 Segmentation segment_by_flags(const Capture& capture, const SegmentationOptions& options) {
     std::vector<std::uint8_t> bytes;
-    bytes.reserve(capture.event_count());
-    for (std::size_t i = 0; i < capture.event_count(); ++i) {
-        if (capture.event_size(i) != 1) {
-            return Segmentation();
-        }
-        bytes.push_back(capture.event_bytes(i)[0]);
+    if (!single_bytes(capture, &bytes)) {
+        return Segmentation();
     }
 
     // Only a byte that is followed by itself often enough is worth cutting at.
@@ -237,9 +251,242 @@ Segmentation segment_by_flags(const Capture& capture, const SegmentationOptions&
     return Segmentation(info, best);
 }
 
+namespace {
+
+const std::uint32_t kMaxLengthOffset = 8;        // the length is looked for in the 8 bytes after the sync byte
+
+// One reading of the stream as sync byte + length: where the length is, how wide, in which order, and
+// what is added to it.
+struct SyncCandidate {
+    std::uint8_t  sync       = 0;
+    std::uint32_t offset     = 0;
+    std::uint32_t width      = 0;
+    bool          big_endian = false;
+    std::int64_t  adjust     = 0;
+};
+
+std::uint64_t read_length(const std::vector<std::uint8_t>& bytes, std::uint64_t at, const SyncCandidate& c) {
+    std::uint64_t value = 0;
+    for (std::uint32_t i = 0; i < c.width; ++i) {
+        const std::uint32_t index = c.big_endian ? i : c.width - 1 - i;
+        value = (value << 8) | bytes[at + index];
+    }
+    return value;
+}
+
+// What following a candidate through the stream gave.
+struct Chain {
+    std::vector<FrameSpan> frames;
+    std::uint64_t          breaks  = 0;
+    std::uint64_t          covered = 0;
+    bool                   varies  = false;     // the lengths are not all the same
+    std::size_t            before  = 0;         // how many different bytes come right before a frame
+};
+
+// From the first sync byte: a frame is where the length says, and counts when the byte after it is the
+// sync byte again or the stream ends. When it is not (a sync byte inside a payload, garbage, a length that
+// runs past the end), the chain starts again at the next sync byte, and that is a break once the chain has
+// begun: before the first frame it is only looking for the start, and after the last sync byte there is
+// nothing to start again at, which is the end of the capture.
+Chain follow(const std::vector<std::uint8_t>& bytes, const std::vector<std::uint64_t>& at, const SyncCandidate& c) {
+    Chain               chain;
+    const std::uint64_t size = bytes.size();
+    std::uint64_t       pos  = at.front();
+    std::uint64_t       first_length = 0;
+    std::bitset<256>    before;
+    for (;;) {
+        if (pos + c.offset + c.width > size) {
+            break;                                           // not even the length is there: the end
+        }
+        const std::uint64_t length = read_length(bytes, pos + c.offset, c);
+        const std::int64_t  total  = static_cast<std::int64_t>(length) + c.adjust;
+        if (total >= static_cast<std::int64_t>(c.offset + c.width)) {         // it holds its own length
+            const std::uint64_t next = pos + static_cast<std::uint64_t>(total);
+            if (next == size || (next < size && bytes[next] == c.sync)) {
+                if (chain.frames.empty()) {
+                    first_length = length;
+                } else if (length != first_length) {
+                    chain.varies = true;
+                }
+                if (!chain.frames.empty()) {
+                    before.set(bytes[pos - 1]);              // not the first frame's: what is before it is not known
+                }
+                chain.frames.push_back(span(pos, static_cast<std::uint64_t>(total)));
+                chain.covered += static_cast<std::uint64_t>(total);
+                pos = next;              // at the end, there is not even a length there, and the chain stops
+                continue;
+            }
+        }
+        const std::vector<std::uint64_t>::const_iterator again = std::upper_bound(at.begin(), at.end(), pos);
+        if (again == at.end()) {
+            break;
+        }
+        chain.breaks += chain.frames.empty() ? 0 : 1;
+        pos = *again;
+    }
+    chain.before = before.count();
+    return chain;
+}
+
+bool is_framing(const Chain& chain, std::uint64_t stream_size, std::uint32_t min_frames) {
+    return chain.frames.size() >= min_frames && chain.breaks * 50 <= chain.frames.size() &&
+           chain.covered * 100 >= 90 * stream_size;
+}
+
+// Is `a` the better of two readings that make the same kind of framing? The bytes cannot tell which of
+// two such readings is the frame, so a rule does, and the first of the candidates wins a tie, which is the
+// lower sync byte.
+bool better(const SyncCandidate& a, const Chain& chain_a, const SyncCandidate& b, const Chain& chain_b) {
+    if (chain_a.varies != chain_b.varies) {
+        return chain_a.varies;                               // a length that varies over a fixed size
+    }
+    if (chain_a.before != chain_b.before) {
+        // The byte before the sync byte is not always the same: a frame starts where the bytes stop being the
+        // same, and a reading that starts after a constant byte starts it too late.
+        return chain_a.before > chain_b.before;
+    }
+    if (!chain_a.varies) {
+        // Frames of one size say nothing of a length, so where and how wide it is means nothing: the one that
+        // follows the most frames, which is the one that did not run out of capture reading it.
+        return chain_a.frames.size() > chain_b.frames.size();
+    }
+    if (a.offset != b.offset) {
+        return a.offset > b.offset;                          // the sync that comes first in the frame
+    }
+    return a.width < b.width;                                // the narrower length
+}
+
+} // namespace
+
+Segmentation segment_by_sync(const Capture& capture, const SegmentationOptions& options) {
+    std::vector<std::uint8_t> bytes;
+    if (!single_bytes(capture, &bytes)) {
+        return Segmentation();
+    }
+    // Where each byte occurs, a run of the same byte counted once, at its first: a sync byte that is twice in
+    // a frame (FF FF, as Dynamixel has it) is one place, and a stream of one byte, an idle line, is none, where
+    // it would be periodic with any period and taken for frames of any size.
+    std::vector<std::vector<std::uint64_t> > at(256);
+    for (std::size_t i = 0; i < bytes.size(); ++i) {
+        if (i == 0 || bytes[i - 1] != bytes[i]) {
+            at[bytes[i]].push_back(i);
+        }
+    }
+
+    bool          found = false;
+    SyncCandidate best;
+    Chain         best_chain;
+    for (unsigned sync = 0; sync < 256; ++sync) {
+        if (at[sync].size() < options.min_sync_frames) {
+            continue;
+        }
+        for (std::uint32_t width = 1; width <= 2; ++width) {
+            for (unsigned order = 0; order < (width == 1 ? 1u : 2u); ++order) {
+                for (std::uint32_t offset = 1; offset <= kMaxLengthOffset; ++offset) {
+                    SyncCandidate c;
+                    c.sync       = static_cast<std::uint8_t>(sync);
+                    c.offset     = offset;
+                    c.width      = width;
+                    c.big_endian = order == 1;
+
+                    // The overhead that each pair of sync bytes in a row would give: the distance between
+                    // them, less the length read at the first. The most frequent three are tried.
+                    std::map<std::int64_t, std::uint64_t> votes;
+                    for (std::size_t i = 0; i + 1 < at[sync].size(); ++i) {
+                        const std::uint64_t p = at[sync][i];
+                        if (p + offset + width > bytes.size()) {
+                            break;
+                        }
+                        ++votes[static_cast<std::int64_t>(at[sync][i + 1] - p) -
+                                static_cast<std::int64_t>(read_length(bytes, p + offset, c))];
+                    }
+                    std::vector<std::pair<std::uint64_t, std::int64_t> > top;
+                    for (std::map<std::int64_t, std::uint64_t>::const_iterator it = votes.begin(); it != votes.end(); ++it) {
+                        const bool fits = it->first >= std::numeric_limits<std::int32_t>::min() &&
+                                          it->first <= std::numeric_limits<std::int32_t>::max();    // for the info
+                        if (fits && it->second >= 3) {
+                            top.push_back(std::make_pair(it->second, it->first));
+                        }
+                    }
+                    std::sort(top.begin(), top.end(), std::greater<std::pair<std::uint64_t, std::int64_t> >());
+                    for (std::size_t t = 0; t < top.size() && t < 3; ++t) {
+                        c.adjust = top[t].second;
+                        const Chain chain = follow(bytes, at[sync], c);
+                        if (is_framing(chain, bytes.size(), options.min_sync_frames) &&
+                            (!found || better(c, chain, best, best_chain))) {
+                            found      = true;
+                            best       = c;
+                            best_chain = chain;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if (!found) {
+        return Segmentation();
+    }
+
+    SegmentationInfo info;
+    info.found  = true;
+    info.kind   = FramingKind::Contiguous;
+    info.sync   = best.sync;
+    info.breaks = best_chain.breaks;
+    if (best_chain.varies) {
+        info.length_offset     = best.offset;
+        info.length_bytes      = best.width;
+        info.length_big_endian = best.big_endian;
+        info.length_adjust     = static_cast<std::int32_t>(best.adjust);
+    } else {
+        info.frame_size = static_cast<std::uint32_t>(best_chain.frames.front().event_count);
+    }
+    return Segmentation(info, best_chain.frames);
+}
+
+namespace {
+
+// Does `fine` cut at every place inside the capture where `coarse` does, and in more places? The frames of
+// `fine` need not cover the capture, so a boundary is where one starts or ends.
+bool refines(const Segmentation& fine, const Segmentation& coarse, std::uint64_t events) {
+    if (fine.frame_count() <= coarse.frame_count()) {
+        return false;
+    }
+    std::vector<std::uint64_t> edges;
+    for (std::size_t i = 0; i < fine.frame_count(); ++i) {
+        edges.push_back(fine.frame(i).first_event);
+        edges.push_back(fine.frame(i).first_event + fine.frame(i).event_count);
+    }
+    std::sort(edges.begin(), edges.end());
+    for (std::size_t i = 0; i < coarse.frame_count(); ++i) {
+        const std::uint64_t cuts[2] = { coarse.frame(i).first_event,
+                                        coarse.frame(i).first_event + coarse.frame(i).event_count };
+        for (int k = 0; k < 2; ++k) {
+            if (cuts[k] > 0 && cuts[k] < events && !std::binary_search(edges.begin(), edges.end(), cuts[k])) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+} // namespace
+
 Segmentation segment_frames(const Capture& capture, const SegmentationOptions& options) {
     const Segmentation flagged = segment_by_flags(capture, options);
-    return flagged.info().found ? flagged : segment_by_gaps(capture, options);
+    if (flagged.info().found) {
+        return flagged;
+    }
+    const Segmentation gaps = segment_by_gaps(capture, options);
+    const Segmentation sync = segment_by_sync(capture, options);
+    if (!sync.info().found) {
+        return gaps;
+    }
+    // Where there are gaps they are the better evidence, unless the sync bytes and lengths cut the same
+    // frames and more (a burst of frames with silence only after the last): then the finer cut is the frames.
+    if (!gaps.info().found || refines(sync, gaps, capture.event_count())) {
+        return sync;
+    }
+    return gaps;
 }
 
 std::vector<std::uint8_t> frame_bytes(const Capture& capture, const FrameSpan& frame) {

@@ -166,6 +166,8 @@ Analysis analyze_frames(const Capture& capture, const Segmentation& segmentation
     if (info.segmentation.kind == FramingKind::Flagged) {
         framing.kind      = FramingKind::Flagged;
         framing.delimiter = info.segmentation.delimiter;
+    } else if (info.segmentation.kind == FramingKind::Contiguous) {
+        framing.kind = FramingKind::Contiguous;
     } else if (info.segmentation.idle_gap_ns != 0) {
         framing.kind        = FramingKind::IdleGap;
         framing.idle_gap_ns = info.segmentation.idle_gap_ns;
@@ -199,10 +201,22 @@ std::string describe_analysis(const Analysis& analysis) {
     const SegmentationInfo& seg = info.segmentation;
     if (!seg.found) {
         out += "framing    none found: the gaps between events do not split into short and long ones, "
-               "and no byte bounds the frames as a flag\n";
+               "no byte bounds the frames as a flag, and none starts them and says how long they are\n";
         return out + describe_model(analysis.model());
     }
-    if (seg.kind == FramingKind::Flagged) {
+    if (seg.kind == FramingKind::Contiguous) {
+        out += "framing    sync byte " + hex_byte(seg.sync) + ", ";
+        if (seg.length_bytes == 0) {
+            out += "frames of " + number(seg.frame_size) + " bytes";
+        } else {
+            out += "frame size = the ";
+            out += seg.length_bytes == 1 ? "1-byte" : seg.length_big_endian ? "big-endian 2-byte" : "little-endian 2-byte";
+            out += " length at offset " + number(seg.length_offset);
+            out += seg.length_adjust >= 0 ? " plus " + number(static_cast<std::uint64_t>(seg.length_adjust))
+                                          : " minus " + number(static_cast<std::uint64_t>(-static_cast<std::int64_t>(seg.length_adjust)));
+        }
+        out += " (" + number(seg.breaks) + (seg.breaks == 1 ? " break" : " breaks") + " in the chain)\n";
+    } else if (seg.kind == FramingKind::Flagged) {
         out += "framing    flags: the byte " + hex_byte(seg.delimiter) + " bounds each frame (" + number(seg.flags) +
                " of them in the capture)\n";
     } else if (seg.idle_gap_ns == 0) {

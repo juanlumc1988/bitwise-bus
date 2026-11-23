@@ -147,7 +147,8 @@ if(BW_BUILD_TESTS)
         tests/test_nmea.cpp
         tests/test_mavlink2.cpp
         tests/test_stuffing.cpp
-        tests/test_flags.cpp)
+        tests/test_flags.cpp
+        tests/test_sync.cpp)
     target_include_directories(bw_tests PRIVATE tests/third_party)
     target_compile_definitions(bw_tests PRIVATE
         "BW_CORPUS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus\""
@@ -237,6 +238,19 @@ if(BW_BUILD_TESTS)
         COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_hdlc_ppp_seed2_30frames.csv)
     set_tests_properties(cli_analyze_hdlc_ppp PROPERTIES PASS_REGULAR_EXPRESSION
         "framing +flags: the byte 0x7E bounds each frame \\(90 of them in the capture\\).*frames +30 \\(2 of a size too rare.*framing: between 0x7E")
+    # And on the three of frames that start with a sync byte and say how long they are.
+    add_test(NAME cli_analyze_ubx
+        COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_ubx_seed1_30frames.csv)
+    set_tests_properties(cli_analyze_ubx PROPERTIES PASS_REGULAR_EXPRESSION
+        "framing +sync byte 0xB5, frame size = the 1-byte length at offset 4 plus 8 \\(0 breaks in the chain\\).*frames +30.*type0 +14 bytes, 12 frames.*framing: contiguous, nothing between frames")
+    add_test(NAME cli_analyze_mavlink1
+        COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_mavlink1_seed1_30frames.csv)
+    set_tests_properties(cli_analyze_mavlink1 PROPERTIES PASS_REGULAR_EXPRESSION
+        "framing +sync byte 0xFE, frame size = the 1-byte length at offset 1 plus 8 \\(0 breaks in the chain\\).*frames +30.*type0 +39 bytes, 11 frames")
+    add_test(NAME cli_analyze_mavlink2
+        COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_mavlink2_seed1_30frames.csv)
+    set_tests_properties(cli_analyze_mavlink2 PROPERTIES PASS_REGULAR_EXPRESSION
+        "framing +sync byte 0xFD, frame size = the 1-byte length at offset 1 plus 12 \\(0 breaks in the chain\\).*frames +30 \\(5 of a size too rare.*type0 +43 bytes, 7 frames")
     add_test(NAME cli_analyze_option
         COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_modbus_rtu_seed1_50frames_jitter300.csv
                 --min-frames 51)

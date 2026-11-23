@@ -272,17 +272,25 @@ later, and several will lean on code written for Track A.
   3. SLIP and HDLC/PPP (byte stuffing: the model describes the frame as it is
      once the stuffing is taken out; done: `src/protocols/slip.cpp` and
      `src/protocols/hdlc_ppp.cpp`);
-  4. stage 3, in two steps. (a) Frames bounded by a flag on both sides, which is
-     what SLIP and HDLC have (done: `segment_by_flags` in `bw/segmentation.h`; the
-     pipeline cuts by flags if the capture has them and by gaps if not). (b) Frames
-     cut by terminators, by a flag that two frames share, and by a sync pattern and
-     a length, together, with a checksum that validates a cut as evidence for it.
-     They go together because a byte that occurs once in each frame cuts it
-     somewhere, and the bytes alone do not say whether that is its end, its start
-     or the middle of it: on 200 UBX frames a terminator at 0xB5 and one at 0x62
-     both make 200 frames, each shifted from the true ones, and on 200 NMEA
-     sentences a line feed, a carriage return, `$` and `P` all do. The length is
-     the evidence that tells a terminator from a start and a sync pattern;
+  4. stage 3, in three steps. (a) Frames bounded by a flag on both sides, which
+     is what SLIP and HDLC have (done: `segment_by_flags` in `bw/segmentation.h`).
+     (b) Frames that start with a sync byte and say their length, which is what UBX
+     and MAVLink have (done: `segment_by_sync`): from a sync byte the stage follows
+     the chain, from where each length says a frame ends to the next sync byte, and
+     it is the framing when the chain covers the capture with almost no break. A
+     sync byte that happens to occur inside a payload breaks nothing, and the
+     length is the evidence that tells where a frame starts: UBX is found at 0xB5
+     and not at the 0x62 after it, which makes as many frames, each shifted: a frame
+     starts where the byte before it stops being the same. The
+     pipeline cuts by flags if the capture has them, by gaps if it has them, and by
+     sync bytes and lengths if not, or where they cut the gaps' frames finer.
+     (c) Frames cut by a terminator, or by a flag that two frames share (the usual
+     HDLC), with a checksum that validates a cut as evidence for it. These are still
+     ambiguous, because a byte that occurs once in each frame cuts it somewhere and
+     the bytes alone do not say whether that is its end, its start or its middle: on
+     200 NMEA sentences a line feed, a carriage return, `$` and `P` all make 200
+     frames, and the sync bytes and lengths do not apply, since sentences have no
+     length. What can settle it is for the next step to find out;
   5. stage 2: Fletcher-8, a CRC with a hidden seed byte, checksums written as
      text, CRC-16/X-25 (the catalogue does not have it, and it is the FCS of HDLC,
      PPP and X.25), and a CRC over the bytes once stuffing is taken out;
@@ -307,20 +315,29 @@ noise. A boundary is a place where a field starts or ends; `exact` is a found
 field with the position and size of a true one, `kind` also its kind. Pinned by
 `tests/test_analyze.cpp`, which a pull request that improves a number changes.
 
-| Protocol, message | Frames found by gaps | Checksum | Fields, truth / found | Boundaries, truth / found / hit | Exact | Kind |
-|---|---|---|---|---|---|---|
-| UBX ACK-ACK | none | none | 8 / 10 | 9 / 11 / 9 | 6 | 5 |
-| UBX CFG-RATE | none | none | 9 / 13 | 10 / 14 / 10 | 5 | 4 |
-| UBX NAV-STATUS | none | none | 13 / 21 | 14 / 22 / 14 | 9 | 5 |
-| MAVLink 1 HEARTBEAT | none | none | 13 / 16 | 14 / 17 / 14 | 12 | 8 |
-| MAVLink 1 SYS_STATUS | none | none | 20 / 37 | 21 / 38 / 20 | 6 | 4 |
-| MAVLink 1 ATTITUDE | none | none | 14 / 23 | 15 / 24 / 15 | 7 | 4 |
+| Protocol, message | Frames found by gaps | By sync byte and length | Checksum | Fields, truth / found | Boundaries, truth / found / hit | Exact | Kind |
+|---|---|---|---|---|---|---|---|
+| UBX ACK-ACK | none | exact | none | 8 / 10 | 9 / 11 / 9 | 6 | 5 |
+| UBX CFG-RATE | none | exact | none | 9 / 13 | 10 / 14 / 10 | 5 | 4 |
+| UBX NAV-STATUS | none | exact | none | 13 / 21 | 14 / 22 / 14 | 9 | 5 |
+| MAVLink 1 HEARTBEAT | none | exact | none | 13 / 16 | 14 / 17 / 14 | 12 | 8 |
+| MAVLink 1 SYS_STATUS | none | exact | none | 20 / 37 | 21 / 38 / 20 | 6 | 4 |
+| MAVLink 1 ATTITUDE | none | exact | none | 14 / 23 | 15 / 24 / 15 | 7 | 4 |
 
-MAVLink 2 has the same two columns, none and none, and one of its own: the
+The first of the two frame columns is stage 3 by gaps, which finds nothing in a
+capture whose frames follow one another with nothing between them; the second is
+stage 3 by a sync byte and a length (UBX at 0xB5, a length of one byte at offset 4
+plus 8; MAVLink 1 at 0xFE, offset 1 plus 8), which finds every frame, and only
+the true ones: 200 of 200 on seeds 1 to 4, with and without timing noise. What
+the later columns say is the same whether the frames are the true ones or the
+ones found, which is how they are pinned (`tests/test_sync.cpp` compares them).
+
+MAVLink 2 has the same two columns, none and exact, and one of its own: the
 payload is cut of its trailing zeros, so one message has frames of several
-sizes. On 300 frames of seed 3 the true frames of the four messages have seven
-sizes, and the stages, which group by size, make seven message types of them;
-no gaps are found, and no checksum.
+sizes. Its sync byte is 0xFD and the length is at offset 1 plus 12, and the
+frames are found exactly. On 300 frames of seed 3 the true frames of the four
+messages have seven sizes, and the stages, which group by size, make seven message
+types of them; no checksum.
 
 NMEA 0183 is of another kind and has its own baseline, on 90 sentences of
 seed 3: by gaps, 30 frames are found where there are 90, none of them a true
@@ -469,6 +486,16 @@ the reason the README gives for `rewind-mcu`.
   `describe_analysis` printed the same flags line as the CLI; a Modbus RTU
   capture was still cut by gaps. 18 checks, all passing, with the same libstdc++
   preload as before.
+
+  **After the sync byte and length of stage 3** (`segment_by_sync`, one more
+  option and seven more fields in `SegmentationInfo`) it was the same again: the
+  same 45 files, no change to the headers or the annotations. From Python, 38
+  checks pass: UBX, MAVLink 1 and MAVLink 2 captures of 300 frames with timing
+  noise are cut at their sync byte (`segment_by_gaps` and `segment_by_flags` find
+  nothing, `segment_by_sync` and `segment_frames` the 300 true frames, with the
+  byte, the offset of the length and what is added to it), the model's framing is
+  `FramingKind.Contiguous`, `describe_analysis` prints the same line as the CLI,
+  SLIP and PPP are still cut by their flags, and Modbus RTU by its gaps.
 
   Not tried: any platform other than Linux x86-64, threads, callbacks and
   directors, large captures, Python versions other than 3.13. To repeat the
