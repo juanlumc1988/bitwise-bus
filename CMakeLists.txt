@@ -54,6 +54,7 @@ add_library(bw_core STATIC
     src/protocols/modbus_rtu.cpp
     src/protocols/ubx.cpp
     src/protocols/mavlink1.cpp
+    src/protocols/mavlink2.cpp
     src/protocols/nmea0183.cpp
     src/segmentation.cpp
     src/checksum.cpp
@@ -141,7 +142,8 @@ if(BW_BUILD_TESTS)
         tests/test_analyze.cpp
         tests/test_kaitai.cpp
         tests/test_ubx_mavlink.cpp
-        tests/test_nmea.cpp)
+        tests/test_nmea.cpp
+        tests/test_mavlink2.cpp)
     target_include_directories(bw_tests PRIVATE tests/third_party)
     target_compile_definitions(bw_tests PRIVATE
         "BW_CORPUS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus\""
@@ -176,6 +178,12 @@ if(BW_BUILD_TESTS)
     add_test(NAME cli_synth_mavlink1 COMMAND bitwise synth mavlink1 --seed 1 --frames 2)
     set_tests_properties(cli_synth_mavlink1 PROPERTIES PASS_REGULAR_EXPRESSION
         "time_ns,channel.*0,uart,,,fe.*173611,uart,,,[0-9a-f][0-9a-f]")
+    add_test(NAME cli_synth_mavlink2 COMMAND bitwise synth mavlink2 --seed 1 --frames 2)
+    set_tests_properties(cli_synth_mavlink2 PROPERTIES PASS_REGULAR_EXPRESSION
+        "time_ns,channel.*0,uart,,,fd.*173611,uart,,,[0-9a-f][0-9a-f]")
+    add_test(NAME cli_protocols_mavlink2 COMMAND bitwise protocols mavlink2)
+    set_tests_properties(cli_protocols_mavlink2 PROPERTIES PASS_REGULAR_EXPRESSION
+        "message type 3 \"protocol_version\".*\"message_id\" +constant +24 bits @56 little-endian = 0x12C.*\"payload\" +payload +sized by field 1.*CRC_EXTRA 217")
     add_test(NAME cli_synth_nmea0183 COMMAND bitwise synth nmea0183 --seed 1 --frames 1)
     set_tests_properties(cli_synth_nmea0183 PROPERTIES PASS_REGULAR_EXPRESSION
         "time_ns,channel.*0,uart,,,24.*2083333,uart,,,47.*4166666,uart,,,50")
@@ -190,7 +198,7 @@ if(BW_BUILD_TESTS)
         "message type 1 \"sys_status\".*\"crc\" +checksum.*CRC-16/MCRF4XX seeded with CRC_EXTRA 124")
     add_test(NAME cli_synth_unknown COMMAND bitwise synth nope)
     set_tests_properties(cli_synth_unknown PROPERTIES PASS_REGULAR_EXPRESSION
-        "unknown protocol 'nope'; known: mavlink1, modbus-rtu, nmea0183, ubx")
+        "unknown protocol 'nope'; known: mavlink1, mavlink2, modbus-rtu, nmea0183, ubx")
     add_test(NAME cli_synth_bad_number COMMAND bitwise synth modbus-rtu --frames 100001)
     set_tests_properties(cli_synth_bad_number PROPERTIES PASS_REGULAR_EXPRESSION
         "--frames: '100001' is not a whole number from 0 to 100000")

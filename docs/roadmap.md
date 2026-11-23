@@ -189,7 +189,7 @@ published test vectors before it enters the corpus.
 | NMEA 0183 | `$` … `*hh` CRLF, text | XOR, written as ASCII hex | text framing, variable-length comma-separated fields | 1 (done) |
 | SLIP | `0xC0` delimiter, `0xDB` escape | none | byte stuffing | 1 |
 | HDLC / PPP async | `0x7E` flag, `0x7D` escape | CRC-16/X-25 | stuffing, then a CRC over the de-stuffed bytes | 1 |
-| MAVLink 1 and 2 | start byte and length | CRC-16 with a per-message extra seed | a hidden seed, sequence counter, length field, message-id discriminator | 1 (version 1 done) |
+| MAVLink 1 and 2 | start byte and length | CRC-16 with a per-message extra seed | a hidden seed, sequence counter, length field, message-id discriminator; in 2, payloads cut of their trailing zeros | 1 (done) |
 | u-blox UBX | two sync bytes and a length | Fletcher-8 | sync bytes, a non-CRC checksum | 1 (done) |
 | Modbus ASCII | `:` … CRLF, hex text | LRC | text framing with hex-encoded fields | 2 |
 | Modbus TCP | MBAP header with a length | none | transaction counter, length field, no checksum | 2 |
@@ -268,7 +268,7 @@ later, and several will lean on code written for Track A.
      checksum written as two hex characters, which the model now can say; done:
      `src/protocols/nmea0183.cpp`), then MAVLink 2 (flags, a message id of
      three bytes, and a payload whose trailing zeros are cut, so that frames of
-     one message differ in length);
+     one message differ in length; done: `src/protocols/mavlink2.cpp`);
   3. SLIP and HDLC/PPP (byte stuffing: the model describes the frame as it is
      once the stuffing is taken out);
   4. stage 3: frames cut by a sync pattern and a length, by terminators, and by
@@ -304,6 +304,12 @@ field with the position and size of a true one, `kind` also its kind. Pinned by
 | MAVLink 1 HEARTBEAT | none | none | 13 / 16 | 14 / 17 / 14 | 12 | 8 |
 | MAVLink 1 SYS_STATUS | none | none | 20 / 37 | 21 / 38 / 20 | 6 | 4 |
 | MAVLink 1 ATTITUDE | none | none | 14 / 23 | 15 / 24 / 15 | 7 | 4 |
+
+MAVLink 2 has the same two columns, none and none, and one of its own: the
+payload is cut of its trailing zeros, so one message has frames of several
+sizes. On 300 frames of seed 3 the true frames of the four messages have seven
+sizes, and the stages, which group by size, make seven message types of them;
+no gaps are found, and no checksum.
 
 NMEA 0183 is of another kind and has its own baseline, on 90 sentences of
 seed 3: by gaps, 30 frames are found where there are 90, none of them a true
