@@ -18,12 +18,21 @@
 // nothing between the frames): a byte that bounds a frame on both sides, as the
 // END of SLIP and the flag of HDLC do, with more flags between one frame and the
 // next as often as not. What shows it is that two of them follow each other: the
-// close of a frame and the open of the next. It is only that, so far: a frame that
-// ends with a terminator, a flag that two frames share, and a frame that starts
-// with a sync pattern and says its length are different framings that look alike
-// in the bytes (a byte that occurs once per frame cuts it somewhere, and the
-// terminator, the start and the middle of a frame are all such places), and
-// telling them apart takes the length (docs/roadmap.md).
+// close of a frame and the open of the next.
+//
+// The third is for frames that follow one another with nothing between them and
+// say how long they are: a sync byte, then a length somewhere in the first few
+// bytes (UBX, MAVLink). If frames are what the stream is made of, a frame ends
+// where its length says and the next begins there, with the sync byte again; so
+// from one occurrence of a candidate sync byte the stage follows that chain, and
+// a candidate (a byte, and where and how wide the length is) is the framing when
+// the chain covers the capture with almost no break. A sync byte that happens to
+// occur inside a payload breaks nothing, which is what a length is for.
+//
+// What neither does is a frame that ends with a terminator, or a flag that two
+// frames share: those look, in the bytes, like a byte that occurs once per frame,
+// and such a byte cuts a frame somewhere, at its end, its start or its middle,
+// that the bytes alone do not tell (docs/roadmap.md).
 //
 // Everything is integer arithmetic, so the same capture is cut in the same
 // places on every platform.
@@ -50,18 +59,36 @@ struct SegmentationOptions {
     std::uint32_t min_gap_ratio = 3;
     // A byte is taken as a flag only if it bounds at least this many frames.
     std::uint32_t min_flag_frames = 8;
+    // A sync byte and a length are taken as the framing only if the chain they
+    // make has at least this many frames.
+    std::uint32_t min_sync_frames = 8;
 };
 
 struct SegmentationInfo {
     // False when the capture shows no division into frames. Everything else
     // here is zero then.
     bool          found                = false;
-    // What cut the frames: IdleGap or Flagged, and Unknown for frames that were
-    // given (a segmentation built by hand, a generator's truth).
+    // What cut the frames: IdleGap, Flagged or Contiguous (a sync byte and a
+    // length), and Unknown for frames that were given (a segmentation built by
+    // hand, a generator's truth).
     FramingKind   kind                 = FramingKind::Unknown;
     // Flagged: the flag, and how many bytes of the capture are that byte.
     std::uint8_t  delimiter            = 0;
     std::uint64_t flags                = 0;
+    // Contiguous: every frame starts with the byte `sync`. Its size is the
+    // number in the `length_bytes` bytes that start `length_offset` bytes after
+    // the sync byte (the sync byte is at offset 0), little-endian unless
+    // length_big_endian, plus length_adjust, which may be negative. When every
+    // frame has the same size there is no length to read: length_bytes is 0 and
+    // frame_size is the size. `breaks` is how many times the chain failed and
+    // started again at the next sync byte.
+    std::uint8_t  sync                 = 0;
+    std::uint32_t length_offset        = 0;
+    std::uint32_t length_bytes         = 0;
+    bool          length_big_endian    = false;
+    std::int32_t  length_adjust        = 0;
+    std::uint32_t frame_size           = 0;
+    std::uint64_t breaks               = 0;
     // A gap of at least this many nanoseconds, between two consecutive events,
     // ends a frame: the shortest gap that was classed as between frames.
     std::uint64_t idle_gap_ns          = 0;
@@ -111,8 +138,38 @@ Segmentation segment_by_gaps(const Capture& capture, const SegmentationOptions& 
 // qualifies. Timing plays no part.
 Segmentation segment_by_flags(const Capture& capture, const SegmentationOptions& options);
 
-// The way the pipeline cuts: by flags if the capture has them, and otherwise by
-// gaps.
+// Cuts a capture of single-byte events into frames that start with a sync byte
+// and say how long they are (a kind of Contiguous). For each byte that occurs at
+// least min_sync_frames times (a run of the same byte counts once, at its first:
+// FF FF is one sync byte), each place and width of a length in the 8 bytes after
+// it (1 byte, or 2 in either order), and each of the three most frequent distances
+// between a sync byte and the next one beyond the length it reads (the overhead,
+// which is the rest of the frame), the stage follows the chain of
+// frames: from a sync byte to where its length says the frame ends, which has to
+// be another sync byte (or the end), and after a break at the next sync byte.
+// The chain is the framing when it has at least min_sync_frames frames, at most
+// one break in 50 of them, and covers at least 90% of the bytes. A frame cut
+// short by the end of the capture is in no frame, nor are the bytes that the
+// chain did not follow.
+//
+// Candidates that explain the capture the same way are told apart by rules, since
+// the bytes cannot: one whose lengths are not all the same over one of a fixed
+// size; then the one that the most different bytes come before, so that a frame
+// starts where the bytes before it stop being the same (UBX is found at 0xB5 and
+// not at the 0x62 that follows it, whose byte before is always 0xB5); then, for
+// lengths that vary, the later length, which is the sync that comes earliest in
+// the frame, and the narrower (a 16-bit length whose high byte is always 0 is
+// found as 1 byte); and for a fixed size, the one with more frames. The first of
+// the candidates, the lower byte, wins a tie. A frame that ends with a byte that
+// is always the same is cut so that the byte starts the next frame. Nothing
+// found (found false) when an event holds more or fewer than one byte, or no
+// candidate is the framing.
+Segmentation segment_by_sync(const Capture& capture, const SegmentationOptions& options);
+
+// The way the pipeline cuts: by flags if the capture has them; else by gaps, and
+// by a sync byte and a length if there are no gaps, or if that cuts at every place
+// the gaps do and in more (frames that come in bursts); else by whichever finds
+// something.
 Segmentation segment_frames(const Capture& capture, const SegmentationOptions& options);
 
 // The bytes of a frame, in order, as one run. Throws std::out_of_range for a

@@ -441,12 +441,20 @@ TEST_CASE("flags: the pipeline cuts by flags when it can and by gaps when it can
     CHECK(gaps.info().idle_gap_ns > 0);
     CHECK(bw::analyze(modbus.capture(), bw::AnalyzeOptions()).model().framing().kind == bw::FramingKind::IdleGap);
 
-    // And a capture that neither flags nor gaps cut says so, in a line that names both.
-    const Dataset ubx = make("ubx", 1, 50);
-    const bw::Analysis none = bw::analyze(ubx.capture(), bw::AnalyzeOptions());
+    // And a capture that neither flags, gaps nor a sync byte and a length cut says so, in a line that names the three.
+    Bytes noise;
+    std::uint64_t x = 88172645463325252ULL;
+    for (int i = 0; i < 4000; ++i) {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        noise.push_back(static_cast<std::uint8_t>(x >> 24));
+    }
+    const bw::Analysis none = bw::analyze(capture_of(noise), bw::AnalyzeOptions());
     CHECK_FALSE(none.info().segmentation.found);
     CHECK(bw::describe_analysis(none).find("framing    none found: the gaps between events do not split into short and long ones, "
-                                           "and no byte bounds the frames as a flag\n") != std::string::npos);
+                                           "no byte bounds the frames as a flag, and none starts them and says how long they are\n") !=
+          std::string::npos);
 }
 
 TEST_CASE("flags: frames given with a kind of flags are described as such, and without one as before") {
