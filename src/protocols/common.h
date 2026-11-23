@@ -73,6 +73,26 @@ inline std::uint32_t random_float_bits(Rng* rng, unsigned base, unsigned span) {
     return (sign << 31) | (exponent << 23) | mantissa;
 }
 
+// Byte stuffing: each flag or escape byte of `bytes` is sent as the escape byte and a code, and the
+// others as they are. (SLIP's flag 0xC0 is 0xDB 0xDC and its escape 0xDB is 0xDB 0xDD; HDLC's 0x7E is
+// 0x7D 0x5E and its 0x7D is 0x7D 0x5D.)
+inline std::vector<std::uint8_t> stuff(const std::vector<std::uint8_t>& bytes, std::uint8_t flag,
+                                       std::uint8_t escape, std::uint8_t flag_code, std::uint8_t escape_code) {
+    std::vector<std::uint8_t> out;
+    for (std::size_t i = 0; i < bytes.size(); ++i) {
+        if (bytes[i] == flag) {
+            out.push_back(escape);
+            out.push_back(flag_code);
+        } else if (bytes[i] == escape) {
+            out.push_back(escape);
+            out.push_back(escape_code);
+        } else {
+            out.push_back(bytes[i]);
+        }
+    }
+    return out;
+}
+
 inline void check_generate_options(const GenerateOptions& options) {
     if (options.frames > 100000) {
         throw std::invalid_argument("frames is at most 100000");

@@ -253,10 +253,12 @@ against.
 
 ```console
 $ bitwise protocols
+hdlc-ppp     PPP in HDLC-like framing (RFC 1662): LCP echo, IPCP request and IP datagram, FCS-16, 115200 baud 8N1, one event per byte
 mavlink1     MAVLink 1: HEARTBEAT, SYS_STATUS and ATTITUDE, 57600 baud 8N1, back to back, one event per byte
 mavlink2     MAVLink 2: HEARTBEAT, SYS_STATUS, ATTITUDE and PROTOCOL_VERSION, payloads without their trailing zeros, 57600 baud 8N1, back to back, one event per byte
 modbus-rtu   Modbus RTU requests for functions 3 and 4, 9600 baud 8N1, one event per byte
 nmea0183     NMEA 0183: GGA, RMC and VTG sentences, 4800 baud 8N1, three back to back each second, one event per byte
+slip         SLIP (RFC 1055): sample and status records between ENDs with byte stuffing, 115200 baud 8N1, one event per byte
 ubx          u-blox UBX: ACK-ACK, CFG-RATE and NAV-STATUS, 115200 baud 8N1, back to back, one event per byte
 $ bitwise synth modbus-rtu --seed 1 --frames 3 | head -5
 # bitwise-capture 1
@@ -294,16 +296,18 @@ its own, and nothing in the capture says it belongs with the byte after it.
 Random bytes at the same timing come out as one payload field and no checksum;
 without timing there is no framing and it says so.
 
-Four protocols of the first wave of the corpus (UBX, MAVLink 1 and MAVLink 2,
-binary; NMEA 0183, text) are there to be generated, and today `analyze` makes little of
-them. UBX and MAVLink frames follow one another with nothing between, so there
-is no gap to cut at, and their checksums (Fletcher-8, and a CRC with a seed that
-is not in the frame) are not ones it knows. The frames of MAVLink 2 also differ
-in length for the same message, because the zeros at the end of a payload are
-not sent. NMEA sentences differ in length and
-come three at a time with a second of silence after them, so the gaps find the
-seconds and not the sentences, and the exclusive-or checksum is written as two
-hexadecimal characters. That is the starting point of the next steps of the
+Six protocols of the first wave of the corpus (UBX, MAVLink 1 and MAVLink 2,
+binary; NMEA 0183, text; SLIP and PPP in HDLC-like framing, byte stuffing) are there to
+be generated, and today `analyze` makes little of them. UBX, MAVLink and the two stuffed
+protocols have no gap to cut at, since their frames follow one another at the pace of the
+line, and the checksums of the first three (Fletcher-8, and a CRC with a seed that is not in
+the frame) and the FCS of PPP (a CRC that is not in the catalogue, over bytes as they were
+before the stuffing) are not ones it knows. The frames of MAVLink 2 differ in length for
+the same message, because the zeros at the end of a payload are not sent, and those of SLIP
+and PPP, because a flag or an escape in the data costs a byte more. NMEA sentences differ
+in length and come three at a time with a second of silence after them, so the gaps find the
+seconds and not the sentences, and the exclusive-or checksum is written as two hexadecimal
+characters. That is the starting point of the next steps of the
 [roadmap](docs/roadmap.md), measured in its table of the baseline.
 
 ## What this does not do yet

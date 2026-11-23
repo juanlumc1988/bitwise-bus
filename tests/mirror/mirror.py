@@ -133,12 +133,50 @@ MAVLINK2_EXTRA = {
 }
 
 
+def _fcs_table():
+    """The table of RFC 1662 for the 16-bit frame check sequence: 0x8408, the polynomial of CRC-16/X-25 reflected."""
+    table = []
+    for byte in range(256):
+        value = byte
+        for _ in range(8):
+            value = (value >> 1) ^ 0x8408 if value & 1 else value >> 1
+        table.append(value)
+    return table
+
+
+FCS_TABLE = _fcs_table()
+
+
+def fcs16(data):
+    """The register of the PPP FCS-16, as RFC 1662 computes it, one table step a byte; not yet complemented."""
+    register = 0xFFFF
+    for byte in data:
+        register = (register >> 8) ^ FCS_TABLE[(register ^ byte) & 0xFF]
+    return register
+
+
+def stuff(data, flag, escape, flag_code, escape_code):
+    out = []
+    for byte in data:
+        if byte == flag:
+            out += [escape, flag_code]
+        elif byte == escape:
+            out += [escape, escape_code]
+        else:
+            out.append(byte)
+    return out
+
+
 def self_check():
     assert crc16_modbus(b"123456789") == 0x4B37                       # CRC-16/MODBUS
     assert mcrf4xx(b"123456789") == 0x6F91                             # CRC-16/MCRF4XX
     # UBX-ACK-ACK acknowledging CFG-MSG, and the poll of UBX-CFG-PRT, from the u-blox documentation.
     assert fletcher8([0x05, 0x01, 0x02, 0x00, 0x06, 0x01]) == (0x0F, 0x38)
     assert fletcher8([0x06, 0x00, 0x00, 0x00]) == (0x06, 0x18)
+    assert fcs16(b"123456789") ^ 0xFFFF == 0x906E                      # CRC-16/X-25
+    frame = [0xFF, 0x03, 0xC0, 0x21, 0x09, 0x01, 0x00, 0x08, 0x0B, 0x7E, 0x9A, 0x31]
+    fcs = fcs16(frame) ^ 0xFFFF
+    assert fcs16(frame + [fcs & 0xFF, fcs >> 8]) == 0xF0B8             # the residue of a good PPP frame
     # Sentences as they are written in the NMEA 0183 descriptions that circulate (GGA, RMC, GLL).
     assert nmea_checksum("GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,") == "47"
     assert nmea_checksum("GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W") == "6A"
@@ -312,6 +350,58 @@ def mavlink2(seed, frames, jitter):
     return csv("uart", events)
 
 
+def slip(seed, frames, jitter):
+    char_ns = 10 * 1_000_000_000 // 115200
+    max_delay = char_ns * jitter // 1000
+    rng = SplitMix64(seed)
+    time0 = rng.below(1000000)
+    events, start = [], 0
+    for i in range(frames):
+        kind = rng.below(2)
+        content = [0x10 if kind == 0 else 0x20] + [(i >> 8) & 0xFF, i & 0xFF]
+        time = time0 + 100 * i                       # never reaches 2**32: below 1000000 + 100 * 100000
+        content += [(time >> 24) & 0xFF, (time >> 16) & 0xFF, (time >> 8) & 0xFF, time & 0xFF]
+        if kind == 0:
+            for _ in range(6):
+                reading = rng.below(65536)
+                content += [reading >> 8, reading & 0xFF]
+        else:
+            content.append(rng.below(4))
+            battery = 11000 + rng.below(1600)
+            content += [battery >> 8, battery & 0xFF]
+        frame = [0xC0] + stuff(content, 0xC0, 0xDB, 0xDC, 0xDD) + [0xC0]
+        start = emit(rng, start, char_ns, max_delay, frame, events)
+    return csv("uart", events)
+
+
+def hdlc_ppp(seed, frames, jitter):
+    char_ns = 10 * 1_000_000_000 // 115200
+    max_delay = char_ns * jitter // 1000
+    rng = SplitMix64(seed)
+    addresses = [0xC0000201, 0xC0000202, 0x0A000001, 0x0A000002]
+    magic = 0x0B7E9A31
+    events, start = [], 0
+    lcp_id = ipcp_id = 0
+    for _ in range(frames):
+        idle = rng.below(3)
+        kind = rng.below(3)
+        content = [0xFF, 0x03]
+        if kind == 0:
+            content += [0xC0, 0x21, 9, lcp_id, 0, 8] + [(magic >> s) & 0xFF for s in (24, 16, 8, 0)]
+            lcp_id = (lcp_id + 1) & 0xFF
+        elif kind == 1:
+            address = addresses[rng.below(4)]
+            content += [0x80, 0x21, 1, ipcp_id, 0, 10, 3, 6] + [(address >> s) & 0xFF for s in (24, 16, 8, 0)]
+            ipcp_id = (ipcp_id + 1) & 0xFF
+        else:
+            content += [0x00, 0x21] + [rng.below(256) for _ in range(24)]
+        fcs = fcs16(content) ^ 0xFFFF
+        content += [fcs & 0xFF, fcs >> 8]
+        start = emit(rng, start, char_ns, max_delay, [0x7E] * idle, events)
+        start = emit(rng, start, char_ns, max_delay, [0x7E] + stuff(content, 0x7E, 0x7D, 0x5E, 0x5D) + [0x7E], events)
+    return csv("uart", events)
+
+
 def nmea0183(seed, frames, jitter):
     char_ns = 10 * 1_000_000_000 // 4800
     max_delay = char_ns * jitter // 1000
@@ -375,7 +465,8 @@ def tenths(value):
     return "%d.%d" % (value // 10, value % 10)
 
 
-GENERATORS = {"modbus-rtu": modbus_rtu, "ubx": ubx, "mavlink1": mavlink1, "mavlink2": mavlink2, "nmea0183": nmea0183}
+GENERATORS = {"modbus-rtu": modbus_rtu, "ubx": ubx, "mavlink1": mavlink1, "mavlink2": mavlink2, "nmea0183": nmea0183,
+              "slip": slip, "hdlc-ppp": hdlc_ppp}
 
 # The captures that tests/corpus holds: file name, protocol, seed, frames, jitter.
 CORPUS = [
@@ -386,6 +477,11 @@ CORPUS = [
     ("synth_ubx_seed3_40frames_jitter300.csv", "ubx", 3, 40, 300),
     ("synth_nmea0183_seed1_6frames.csv", "nmea0183", 1, 6, 0),
     ("synth_nmea0183_seed3_9frames_jitter300.csv", "nmea0183", 3, 9, 300),
+    # Seeds with frames that have both of the escapes of the protocol in them.
+    ("synth_slip_seed3_30frames.csv", "slip", 3, 30, 0),
+    ("synth_slip_seed3_40frames_jitter300.csv", "slip", 3, 40, 300),
+    ("synth_hdlc_ppp_seed2_30frames.csv", "hdlc-ppp", 2, 30, 0),
+    ("synth_hdlc_ppp_seed2_40frames_jitter300.csv", "hdlc-ppp", 2, 40, 300),
     ("synth_mavlink2_seed1_30frames.csv", "mavlink2", 1, 30, 0),
     ("synth_mavlink2_seed3_40frames_jitter300.csv", "mavlink2", 3, 40, 300),
     ("synth_mavlink1_seed1_30frames.csv", "mavlink1", 1, 30, 0),
