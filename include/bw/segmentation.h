@@ -29,10 +29,19 @@
 // the chain covers the capture with almost no break. A sync byte that happens to
 // occur inside a payload breaks nothing, which is what a length is for.
 //
-// What neither does is a frame that ends with a terminator, or a flag that two
-// frames share: those look, in the bytes, like a byte that occurs once per frame,
-// and such a byte cuts a frame somewhere, at its end, its start or its middle,
-// that the bytes alone do not tell (docs/roadmap.md).
+// A flag that two frames share (one flag between frames, which is how HDLC is
+// usually sent) looks, in the bytes, like any byte that occurs once per frame, and
+// such a byte cuts a frame somewhere, at its end, its start or its middle, that the
+// bytes alone do not tell (docs/roadmap.md). What does tell is the stuffing, which
+// is why a flag is wanted twice in a row or with stuffing: a flag that has to be
+// kept out of the frames has an escape byte, which is always followed by one of
+// two codes, and nothing else in a capture is.
+//
+// The same is true of a terminator, and it is told by a convention instead: if
+// the capture is text, its frames are the lines, which end with a line feed (and
+// the carriage return before it, which is part of the frame). NMEA 0183 is that.
+// A terminator of another kind (an ETX, a NUL after binary data) is a byte that
+// occurs once in a frame like any other, and is not found.
 //
 // Everything is integer arithmetic, so the same capture is cut in the same
 // places on every platform.
@@ -62,19 +71,29 @@ struct SegmentationOptions {
     // A sync byte and a length are taken as the framing only if the chain they
     // make has at least this many frames.
     std::uint32_t min_sync_frames = 8;
+    // Lines of text are taken as frames only if there are at least this many.
+    std::uint32_t min_line_frames = 8;
 };
 
 struct SegmentationInfo {
     // False when the capture shows no division into frames. Everything else
     // here is zero then.
     bool          found                = false;
-    // What cut the frames: IdleGap, Flagged or Contiguous (a sync byte and a
-    // length), and Unknown for frames that were given (a segmentation built by
-    // hand, a generator's truth).
+    // What cut the frames: IdleGap, Flagged, Terminated (lines of text) or
+    // Contiguous (a sync byte and a length), and Unknown for frames that were
+    // given (a segmentation built by hand, a generator's truth).
     FramingKind   kind                 = FramingKind::Unknown;
-    // Flagged: the flag, and how many bytes of the capture are that byte.
+    // Flagged: the flag, and how many bytes of the capture are that byte. Terminated:
+    // the byte that ends each frame, and how many of them the capture has. With
+    // `escaped`, the capture shows the stuffing that keeps the flag out of the
+    // frames: the flag inside one is sent as `escape` and `delimiter_code`, and
+    // `escape` as `escape` and `escape_code`.
     std::uint8_t  delimiter            = 0;
     std::uint64_t flags                = 0;
+    bool          escaped              = false;
+    std::uint8_t  escape               = 0;
+    std::uint8_t  delimiter_code       = 0;
+    std::uint8_t  escape_code          = 0;
     // Contiguous: every frame starts with the byte `sync`. Its size is the
     // number in the `length_bytes` bytes that start `length_offset` bytes after
     // the sync byte (the sync byte is at offset 0), little-endian unless
@@ -128,7 +147,11 @@ Segmentation segment_by_gaps(const Capture& capture, const SegmentationOptions& 
 // bytes before the first flag and after the last one, are in no frame, so the
 // frames do not cover the capture. (A flag that two frames share belongs to the
 // first.) A byte counts as the flag when
-//   - at least a quarter of its occurrences are followed by another one;
+//   - at least a quarter of its occurrences are followed by another one, or the
+//     capture shows its stuffing (an escape byte that is followed, at least three
+//     times and every time, by one of two codes, each of them at least once: the
+//     flag and the escape with bit 5 flipped, as RFC 1662 has it, or the C0 DB DC
+//     DD of SLIP);
 //   - it bounds at least min_flag_frames frames;
 //   - at most 4 distinct bytes start the frames (the byte after the flag), and
 //     at least 95% of the frames start with one of them;
@@ -166,10 +189,24 @@ Segmentation segment_by_flags(const Capture& capture, const SegmentationOptions&
 // candidate is the framing.
 Segmentation segment_by_sync(const Capture& capture, const SegmentationOptions& options);
 
+// Cuts a capture of single-byte events that is text into its lines (a kind of
+// Terminated, the delimiter 0x0A): every frame is a run of bytes up to and
+// including a line feed, so a carriage return before it is in the frame. The
+// capture is text when at least 95% of its bytes are printable ASCII, tab, carriage
+// return or line feed. A line of nothing (a line feed, or a carriage return and a
+// line feed) is no frame, and the bytes after the last line feed, which end with
+// none, are in no frame. The lines are the frames when there are at least
+// min_line_frames of them, they start with at most 4 distinct bytes (95% of them),
+// and 95% are within a factor of 4 of the median size, as for flags. Nothing found
+// (found false) when an event holds more or fewer than one byte, or those do not
+// hold.
+Segmentation segment_by_lines(const Capture& capture, const SegmentationOptions& options);
+
 // The way the pipeline cuts: by flags if the capture has them; else by gaps, and
-// by a sync byte and a length if there are no gaps, or if that cuts at every place
-// the gaps do and in more (frames that come in bursts); else by whichever finds
-// something.
+// by a sync byte and a length, or by lines if it is text, where there are no gaps
+// or where that cuts at every place the gaps do and in more (frames that come in
+// bursts); else by whichever finds something. A sync byte and a length come before
+// lines.
 Segmentation segment_frames(const Capture& capture, const SegmentationOptions& options);
 
 // The bytes of a frame, in order, as one run. Throws std::out_of_range for a

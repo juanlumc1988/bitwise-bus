@@ -317,6 +317,181 @@ TEST_CASE("flags: when the capture has flags and gaps, the flags decide: they ar
     CHECK(same_frames(chosen, b.frames));
 }
 
+TEST_CASE("flags: the stuffing of SLIP and of HDLC is found, as the capture shows it") {
+    struct Expect { const char* name; std::uint8_t flag, escape, flag_code, escape_code; };
+    const Expect expects[2] = { { "slip", 0xC0, 0xDB, 0xDC, 0xDD }, { "hdlc-ppp", 0x7E, 0x7D, 0x5E, 0x5D } };
+    for (int n = 0; n < 2; ++n) {
+        for (std::uint64_t seed = 1; seed <= 4; ++seed) {
+            const Segmentation s = bw::segment_by_flags(make(expects[n].name, seed, 200, seed % 2 ? 0 : 300).capture(),
+                                                        SegmentationOptions());
+            INFO(expects[n].name << " seed " << seed);
+            REQUIRE(s.info().found);
+            CHECK(s.info().escaped);
+            CHECK(s.info().escape == expects[n].escape);
+            CHECK(s.info().delimiter_code == expects[n].flag_code);
+            CHECK(s.info().escape_code == expects[n].escape_code);
+        }
+    }
+    // Frames with nothing to stuff in them have none to show.
+    const Segmentation plain = by_flags(build(contents(12), std::vector<bool>(11, true)).bytes);
+    REQUIRE(plain.info().found);
+    CHECK_FALSE(plain.info().escaped);
+    CHECK(plain.info().escape == 0);
+    CHECK(plain.info().delimiter_code == 0);
+    CHECK(plain.info().escape_code == 0);
+}
+
+// The content of every frame between its two flags, joined with one flag between frames: the usual HDLC.
+Bytes shared_flags(const Dataset& d, std::uint8_t flag, std::vector<FrameSpan>* frames) {
+    Bytes out(1, flag);
+    for (std::size_t i = 0; i < d.frame_count(); ++i) {
+        const Bytes wire = bw::frame_bytes(d.capture(), d.frame(i));
+        const std::uint64_t first = frames->empty() ? 0 : out.size();
+        out.insert(out.end(), wire.begin() + 1, wire.end());           // the content and the closing flag
+        frames->push_back(span(first, out.size() - first));
+    }
+    return out;
+}
+
+TEST_CASE("flags: a flag that two frames share is a flag when the capture shows its stuffing") {
+    const char*   names[2] = { "slip", "hdlc-ppp" };
+    const uint8_t flags[2] = { 0xC0, 0x7E };
+    for (int n = 0; n < 2; ++n) {
+        const Dataset d = make(names[n], 5, 200);
+        std::vector<FrameSpan> expected;
+        const Bytes stream = shared_flags(d, flags[n], &expected);
+        const Segmentation s = by_flags(stream);
+        INFO(names[n]);
+        REQUIRE(s.info().found);
+        CHECK(s.info().delimiter == flags[n]);
+        CHECK(s.info().escaped);
+        CHECK(s.info().flags == 201);
+        CHECK(same_frames(s, expected));
+        // The first has its opening flag and the others start after the one before.
+        CHECK(s.frame(1).event_count + 1 == d.frame(1).event_count);
+
+        // The pipeline says the same, in the model.
+        const bw::Analysis a = bw::analyze(capture_of(stream), bw::AnalyzeOptions());
+        CHECK(a.model().framing().kind == bw::FramingKind::Flagged);
+        CHECK(a.model().framing().delimiter == flags[n]);
+        CHECK(a.model().framing().escaped);
+        CHECK(a.info().frames == 200);
+    }
+}
+
+TEST_CASE("flags: stuffing is an escape byte that is always followed by a code, both codes seen, at least three times") {
+    // Twelve frames that share their flags, with the escape and a code put in the first n of them: the two codes
+    // take turns, so that n = 2 has one of each and n = 3 has three in all.
+    for (std::size_t n = 2; n <= 4; ++n) {
+        std::vector<Bytes> c = contents(12);
+        for (std::size_t i = 0; i < n; ++i) {
+            c[i].insert(c[i].begin() + 2, i % 2 ? 0x5D : 0x5E);
+            c[i].insert(c[i].begin() + 2, 0x7D);
+        }
+        const Segmentation s = by_flags(build(c, std::vector<bool>(11, false), 0x7E).bytes);
+        CAPTURE(n);
+        CHECK(s.info().found == (n >= 3));
+        if (n >= 3) {
+            CHECK(s.info().escape == 0x7D);
+            CHECK(s.info().delimiter_code == 0x5E);
+            CHECK(s.info().escape_code == 0x5D);
+        }
+    }
+    // One of the two codes only, however many times, is not stuffing: a line feed after a carriage return is as
+    // good a flag with its bit 5 flipped (0x2A) as it gets.
+    for (int code = 0; code < 2; ++code) {
+        std::vector<Bytes> c = contents(12);
+        for (std::size_t i = 0; i < 6; ++i) {
+            c[i].insert(c[i].begin() + 2, code == 0 ? 0x5E : 0x5D);
+            c[i].insert(c[i].begin() + 2, 0x7D);
+        }
+        CAPTURE(code);
+        CHECK_FALSE(by_flags(build(c, std::vector<bool>(11, false), 0x7E).bytes).info().found);
+    }
+    // One escape followed by something that is not a code, and it is not stuffing.
+    std::vector<Bytes> c = contents(12);
+    for (std::size_t i = 0; i < 4; ++i) {
+        c[i].insert(c[i].begin() + 2, i == 3 ? 0x20 : (i % 2 ? 0x5D : 0x5E));
+        c[i].insert(c[i].begin() + 2, 0x7D);
+    }
+    CHECK_FALSE(by_flags(build(c, std::vector<bool>(11, false), 0x7E).bytes).info().found);
+}
+
+TEST_CASE("flags: text is not stuffing, however small the capture") {
+    // NMEA has carriage returns, each of them followed by a line feed, which is 0x2A (the star) with bit 5 flipped.
+    const std::uint32_t sizes[4] = { 9, 12, 30, 90 };
+    for (int k = 0; k < 4; ++k) {
+        for (std::uint64_t seed = 1; seed <= 4; ++seed) {
+            const Dataset d = make("nmea0183", seed, sizes[k], seed % 2 ? 0 : 300);
+            INFO("nmea0183 " << sizes[k] << " sentences, seed " << seed);
+            CHECK_FALSE(bw::segment_by_flags(d.capture(), SegmentationOptions()).info().found);
+        }
+    }
+}
+
+TEST_CASE("flags: the two ways of writing the stuffing that are known, and no others") {
+    // Bit 5 of the flag and of the escape flipped: any flag and escape.
+    {
+        std::vector<Bytes> c = contents(12);
+        for (std::size_t i = 0; i < 4; ++i) {
+            c[i].insert(c[i].begin() + 2, i % 2 ? 0x90 : 0x80);              // 0xB0 ^ 0x20, and 0xA0 ^ 0x20
+            c[i].insert(c[i].begin() + 2, 0xB0);
+        }
+        const Segmentation s = by_flags(build(c, std::vector<bool>(11, false), 0xA0).bytes);
+        REQUIRE(s.info().found);
+        CHECK(s.info().delimiter == 0xA0);
+        CHECK(s.info().escape == 0xB0);
+        CHECK(s.info().delimiter_code == 0x80);                              // 0xA0 ^ 0x20
+        CHECK(s.info().escape_code == 0x90);
+    }
+    // C0 DB DC DD, the SLIP's, only for that flag and that escape.
+    for (unsigned flag = 0xC0; flag <= 0xC1; ++flag) {
+        std::vector<Bytes> c = contents(12);
+        for (std::size_t i = 0; i < 4; ++i) {
+            c[i].insert(c[i].begin() + 2, i % 2 ? 0xDD : 0xDC);
+            c[i].insert(c[i].begin() + 2, 0xDB);
+        }
+        const Segmentation s = by_flags(build(c, std::vector<bool>(11, false), static_cast<std::uint8_t>(flag)).bytes);
+        CAPTURE(flag);
+        CHECK(s.info().found == (flag == 0xC0));
+    }
+    // And for that escape only: the same codes after another byte are not it.
+    {
+        std::vector<Bytes> c = contents(12);
+        for (std::size_t i = 0; i < 4; ++i) {
+            c[i].insert(c[i].begin() + 2, i % 2 ? 0xDD : 0xDC);
+            c[i].insert(c[i].begin() + 2, 0xDA);
+        }
+        CHECK_FALSE(by_flags(build(c, std::vector<bool>(11, false), 0xC0).bytes).info().found);
+    }
+    // Two escapes that would do: the one the capture shows most, and the lower byte if equally.
+    for (int more = 0; more <= 2; ++more) {
+        std::vector<Bytes> c = contents(12);
+        // 0x7D with codes 0x5E and 0x5D, and 0x90 with 0x5E and 0xB0: three or four of each, as `more` says.
+        const std::size_t first_count  = more == 1 ? 4 : 3;
+        const std::size_t second_count = more == 2 ? 4 : 3;
+        for (std::size_t i = 0; i < first_count; ++i) {
+            c[i].insert(c[i].begin() + 2, i % 2 ? 0x5D : 0x5E);
+            c[i].insert(c[i].begin() + 2, 0x7D);
+        }
+        for (std::size_t i = 0; i < second_count; ++i) {
+            c[6 + i].insert(c[6 + i].begin() + 2, i % 2 ? 0xB0 : 0x5E);
+            c[6 + i].insert(c[6 + i].begin() + 2, 0x90);
+        }
+        const Segmentation s = by_flags(build(c, std::vector<bool>(11, false), 0x7E).bytes);
+        CAPTURE(more);
+        REQUIRE(s.info().found);
+        CHECK(s.info().escape == (more == 2 ? 0x90 : 0x7D));            // 0 and 1: 3 and 3 (the lower), 4 and 3; 2: 3 and 4
+    }
+    // Two codes that are neither: the flag with bit 5 flipped is missing.
+    std::vector<Bytes> c = contents(12);
+    for (std::size_t i = 0; i < 4; ++i) {
+        c[i].insert(c[i].begin() + 2, i % 2 ? 0x31 : 0x30);
+        c[i].insert(c[i].begin() + 2, 0x7D);
+    }
+    CHECK_FALSE(by_flags(build(c, std::vector<bool>(11, false), 0x7E).bytes).info().found);
+}
+
 TEST_CASE("flags: the bytes before the first flag and after the last one are in no frame") {
     const Built b = build(contents(12), std::vector<bool>(11, true));
     Bytes padded(3, 0x55);
@@ -399,13 +574,23 @@ TEST_CASE("flags: the pipeline cuts by flags when it can and by gaps when it can
     CHECK(a.model().framing().delimiter == 0xC0);
     CHECK(a.info().frames == 300);
     const std::string text = bw::describe_analysis(a);
-    CHECK(text.find("framing    flags: the byte 0xC0 bounds each frame (600 of them in the capture)\n") != std::string::npos);
-    CHECK(text.find("framing: between 0xC0\n") != std::string::npos);
+    CHECK(text.find("framing    flags: the byte 0xC0 bounds each frame (600 of them in the capture), "
+                    "stuffed: 0xC0 as 0xDB 0xDC and 0xDB as 0xDB 0xDD\n") != std::string::npos);
+    CHECK(text.find("framing: between 0xC0, escape 0xDB: 0xC0 as 0xDB 0xDC, 0xDB as 0xDB 0xDD\n") != std::string::npos);
+    CHECK(a.model().framing().escaped);
+    CHECK(a.model().framing().escape == 0xDB);
+    CHECK(a.model().framing().delimiter_code == 0xDC);
+    CHECK(a.model().framing().escape_code == 0xDD);
 
     const Dataset hdlc = make("hdlc-ppp", 3, 300);
     const bw::Analysis h = bw::analyze(hdlc.capture(), bw::AnalyzeOptions());
     CHECK(h.model().framing().kind == bw::FramingKind::Flagged);
     CHECK(h.model().framing().delimiter == 0x7E);
+    CHECK(h.model().framing().escaped);
+    CHECK(h.model().framing().escape == 0x7D);
+    CHECK(h.model().framing().delimiter_code == 0x5E);
+    CHECK(h.model().framing().escape_code == 0x5D);
+    CHECK(bw::describe_analysis(h).find(", stuffed: 0x7E as 0x7D 0x5E and 0x7D as 0x7D 0x5D\n") != std::string::npos);
     CHECK(h.info().frames == 300);
 
     // What the stages make of the frames that the flags found is what they made of the true ones
@@ -441,7 +626,7 @@ TEST_CASE("flags: the pipeline cuts by flags when it can and by gaps when it can
     CHECK(gaps.info().idle_gap_ns > 0);
     CHECK(bw::analyze(modbus.capture(), bw::AnalyzeOptions()).model().framing().kind == bw::FramingKind::IdleGap);
 
-    // And a capture that neither flags, gaps nor a sync byte and a length cut says so, in a line that names the three.
+    // And a capture that neither flags, gaps, a sync byte and a length nor lines cut says so, in a line that names them.
     Bytes noise;
     std::uint64_t x = 88172645463325252ULL;
     for (int i = 0; i < 4000; ++i) {
@@ -453,7 +638,7 @@ TEST_CASE("flags: the pipeline cuts by flags when it can and by gaps when it can
     const bw::Analysis none = bw::analyze(capture_of(noise), bw::AnalyzeOptions());
     CHECK_FALSE(none.info().segmentation.found);
     CHECK(bw::describe_analysis(none).find("framing    none found: the gaps between events do not split into short and long ones, "
-                                           "no byte bounds the frames as a flag, and none starts them and says how long they are\n") !=
+                                           "no byte bounds the frames as a flag, none starts them and says how long they are, and it is not text in lines\n") !=
           std::string::npos);
 }
 

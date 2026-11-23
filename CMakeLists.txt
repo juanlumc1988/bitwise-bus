@@ -148,7 +148,8 @@ if(BW_BUILD_TESTS)
         tests/test_mavlink2.cpp
         tests/test_stuffing.cpp
         tests/test_flags.cpp
-        tests/test_sync.cpp)
+        tests/test_sync.cpp
+        tests/test_lines.cpp)
     target_include_directories(bw_tests PRIVATE tests/third_party)
     target_compile_definitions(bw_tests PRIVATE
         "BW_CORPUS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus\""
@@ -251,6 +252,11 @@ if(BW_BUILD_TESTS)
         COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_mavlink2_seed1_30frames.csv)
     set_tests_properties(cli_analyze_mavlink2 PROPERTIES PASS_REGULAR_EXPRESSION
         "framing +sync byte 0xFD, frame size = the 1-byte length at offset 1 plus 12 \\(0 breaks in the chain\\).*frames +30 \\(5 of a size too rare.*type0 +43 bytes, 7 frames")
+    # And on the one of text, whose sentences end with a line feed, with a second of silence after three.
+    add_test(NAME cli_analyze_nmea0183
+        COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_nmea0183_seed3_9frames_jitter300.csv)
+    set_tests_properties(cli_analyze_nmea0183 PROPERTIES PASS_REGULAR_EXPRESSION
+        "framing +lines: each frame ends with the byte 0x0A \\(9 of them in the capture\\).*frames +9.*framing: ends with 0xA")
     add_test(NAME cli_analyze_option
         COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_modbus_rtu_seed1_50frames_jitter300.csv
                 --min-frames 51)

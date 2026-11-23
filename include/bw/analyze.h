@@ -81,7 +81,7 @@ private:
     std::vector<MessageTypeReport> reports_;
 };
 
-// Segments with segment_frames(): by flags, by a sync byte and a length, or by gaps.
+// Segments with segment_frames(): by flags, by a sync byte and a length, by lines, or by gaps.
 Analysis analyze(const Capture& capture, const AnalyzeOptions& options);
 
 // The same from frames that are already cut, whatever cut them: stage 3 is
@@ -90,8 +90,8 @@ Analysis analyze(const Capture& capture, const AnalyzeOptions& options);
 // and how frames that something else found (a delimiter, a length) can be
 // analysed. The model's framing is what the segmentation says cut the frames:
 // the idle gap (idle_gap_ns is not 0), a flag (a kind of Flagged, and the
-// byte) or frames that follow one another (a kind of Contiguous); unknown
-// otherwise. A segmentation that
+// byte), lines of text (a kind of Terminated, and the byte) or frames that
+// follow one another (a kind of Contiguous); unknown otherwise. A segmentation that
 // says it found nothing (`found` false) is not analysed.
 Analysis analyze_frames(const Capture& capture, const Segmentation& segmentation,
                         const AnalyzeOptions& options);
