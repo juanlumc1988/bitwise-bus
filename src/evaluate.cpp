@@ -108,7 +108,7 @@ bool same_checksum(const Model& truth, std::size_t truth_type, std::size_t truth
     const Coverage      cb = coverage_of(found, found_type, b);
     return pa.fixed == pb.fixed && (!pa.fixed || pa.bit_offset == pb.bit_offset) &&
            a.size_kind == b.size_kind && a.bit_size == b.bit_size &&
-           a.byte_order == b.byte_order &&
+           a.byte_order == b.byte_order && a.ascii_hex == b.ascii_hex &&
            ca.in_bits == cb.in_bits && ca.first == cb.first && ca.last == cb.last &&
            truth.field_detail(truth_type, truth_index) == found.field_detail(found_type, found_index);
 }

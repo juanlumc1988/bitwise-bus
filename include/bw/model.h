@@ -101,6 +101,10 @@ struct FieldInfo {
     std::uint64_t constant      = 0;    // Constant
     std::uint32_t covers_first  = 0;    // Checksum: the first and last field it
     std::uint32_t covers_last   = 0;    //   covers, both included
+    bool          ascii_hex     = false;    // Checksum: written as text, two hexadecimal
+                                            //   digits for each byte of the value, the most
+                                            //   significant first (NMEA 0183's "*47"). bit_size
+                                            //   is the size on the wire: 16 for a byte.
     std::uint32_t evidence_bits = 0;    // an inferred field: bits of evidence behind
                                         //   it, as in the CRC stage. A ground truth
                                         //   leaves it at 0.

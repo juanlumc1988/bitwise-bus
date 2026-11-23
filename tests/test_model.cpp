@@ -201,6 +201,54 @@ TEST_CASE("framing: a delimiter or an escape where the kind has none, or one tha
     CHECK(model.framing().delimiter == 0x7E);
 }
 
+TEST_CASE("a checksum can be written as hexadecimal text, two characters for each byte, most significant first") {
+    const auto hex = [](std::uint32_t bits, ByteOrder order) {
+        FieldInfo info = fixed(FieldKind::Checksum, bits, order);
+        info.ascii_hex = true;
+        return info;
+    };
+    Model model;
+    const std::size_t t = model.add_message_type("m");
+    model.add_field(t, "body", fixed(FieldKind::Payload, 24), "");
+    FieldInfo ok = hex(16, ByteOrder::Big);                    // NMEA 0183's "*47": one byte as two characters
+    model.add_field(t, "checksum", ok, "XOR");
+    CHECK(model.field(t, 1).ascii_hex);
+    CHECK(bw::describe_model(model) ==
+          "framing: unknown\n"
+          "message type 0 \"m\"\n"
+          "  0 \"body\"     payload   24 bits @0\n"
+          "  1 \"checksum\" checksum  16 bits @24 big-endian as hex text covers 0..0 XOR\n");
+
+    // A value of two bytes is four characters.
+    FieldInfo wide = hex(32, ByteOrder::Big);
+    wide.covers_first = 0;
+    wide.covers_last  = 0;
+    CHECK_NOTHROW(model.add_field(t, "wide", wide, ""));
+    const std::size_t before = model.field_count(t);
+
+    // Each of these is refused and changes nothing.
+    FieldInfo not_a_checksum = fixed(FieldKind::Counter, 16, ByteOrder::Big);
+    not_a_checksum.ascii_hex = true;
+    FieldInfo one_digit = hex(8, ByteOrder::NotApplicable);          // a byte is two characters
+    one_digit.covers_first = 0;
+    one_digit.covers_last  = 0;
+    FieldInfo odd = hex(24, ByteOrder::Big);                         // and so is no other size
+    odd.covers_first = 0;
+    odd.covers_last  = 0;
+    FieldInfo little = hex(16, ByteOrder::Little);                   // the first digit is the most significant
+    little.covers_first = 0;
+    little.covers_last  = 0;
+    FieldInfo too_wide = hex(80, ByteOrder::Big);                    // a number is at most 64 bits
+    too_wide.covers_first = 0;
+    too_wide.covers_last  = 0;
+    CHECK_THROWS_AS(model.add_field(t, "a", not_a_checksum, ""), std::invalid_argument);
+    CHECK_THROWS_AS(model.add_field(t, "b", one_digit, ""), std::invalid_argument);
+    CHECK_THROWS_AS(model.add_field(t, "c", odd, ""), std::invalid_argument);
+    CHECK_THROWS_AS(model.add_field(t, "d", little, ""), std::invalid_argument);
+    CHECK_THROWS_AS(model.add_field(t, "e", too_wide, ""), std::invalid_argument);
+    CHECK(model.field_count(t) == before);
+}
+
 TEST_CASE("positions are fixed until something has no fixed size") {
     Model model;
     const std::size_t t = model.add_message_type("m");

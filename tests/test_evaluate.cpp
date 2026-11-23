@@ -296,6 +296,22 @@ TEST_CASE("fields: coverage in bits and coverage by index are never the same thi
     CHECK_FALSE(bw::score_fields(indexed, 0, placed, 0).checksum_match);
 }
 
+TEST_CASE("fields: a checksum written as text is not one written as a number") {
+    const auto build = [](bool as_text) {
+        Model m;
+        const std::size_t t = m.add_message_type("m");
+        m.add_field(t, "body", fixed(FieldKind::Payload, 24), "");
+        bw::FieldInfo crc = fixtures::checksum(16, ByteOrder::Big, 0, 0);
+        crc.ascii_hex     = as_text;
+        m.add_field(t, "crc", crc, "XOR");
+        return m;
+    };
+    CHECK(bw::score_fields(build(true), 0, build(true), 0).checksum_match);
+    CHECK(bw::score_fields(build(false), 0, build(false), 0).checksum_match);
+    CHECK_FALSE(bw::score_fields(build(true), 0, build(false), 0).checksum_match);
+    CHECK_FALSE(bw::score_fields(build(false), 0, build(true), 0).checksum_match);
+}
+
 TEST_CASE("fields: a checksum matches only when position, size, order, coverage and algorithm all do") {
     const Model truth = fixtures::request_model();
     CHECK(bw::score_fields(truth, 0, fixtures::request_model(), 0).checksum_match);
