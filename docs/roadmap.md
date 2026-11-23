@@ -187,8 +187,8 @@ published test vectors before it enters the corpus.
 |---|---|---|---|---|
 | Modbus RTU | idle gap | CRC-16/MODBUS, little-endian | timing segmentation, function-code discriminator, request/response lengths | skeleton |
 | NMEA 0183 | `$` … `*hh` CRLF, text | XOR, written as ASCII hex | text framing, variable-length comma-separated fields | 1 (done) |
-| SLIP | `0xC0` delimiter, `0xDB` escape | none | byte stuffing | 1 |
-| HDLC / PPP async | `0x7E` flag, `0x7D` escape | CRC-16/X-25 | stuffing, then a CRC over the de-stuffed bytes | 1 |
+| SLIP | `0xC0` delimiter, `0xDB` escape | none | byte stuffing | 1 (done) |
+| HDLC / PPP async | `0x7E` flag, `0x7D` escape | CRC-16/X-25 | stuffing, then a CRC over the de-stuffed bytes | 1 (done) |
 | MAVLink 1 and 2 | start byte and length | CRC-16 with a per-message extra seed | a hidden seed, sequence counter, length field, message-id discriminator; in 2, payloads cut of their trailing zeros | 1 (done) |
 | u-blox UBX | two sync bytes and a length | Fletcher-8 | sync bytes, a non-CRC checksum | 1 (done) |
 | Modbus ASCII | `:` … CRLF, hex text | LRC | text framing with hex-encoded fields | 2 |
@@ -270,11 +270,13 @@ later, and several will lean on code written for Track A.
      three bytes, and a payload whose trailing zeros are cut, so that frames of
      one message differ in length; done: `src/protocols/mavlink2.cpp`);
   3. SLIP and HDLC/PPP (byte stuffing: the model describes the frame as it is
-     once the stuffing is taken out);
+     once the stuffing is taken out; done: `src/protocols/slip.cpp` and
+     `src/protocols/hdlc_ppp.cpp`);
   4. stage 3: frames cut by a sync pattern and a length, by terminators, and by
      flags with stuffing, with a checksum that validates a cut as evidence for it;
   5. stage 2: Fletcher-8, a CRC with a hidden seed byte, checksums written as
-     text, and a CRC over the bytes once stuffing is taken out;
+     text, CRC-16/X-25 (the catalogue does not have it, and it is the FCS of HDLC,
+     PPP and X.25), and a CRC over the bytes once stuffing is taken out;
   6. stages 4 and 5: length fields, fields of varying size, text, and the
      numbers of two bytes whose high byte never changes.
 - **Versions.** A minor version once the skeleton works, and one per completed
@@ -319,6 +321,24 @@ given, the stages group them by size, and the sentences of two kinds share
 sizes: they make seven message types where there are three, none with a checksum
 (it is an exclusive or, written as text). Scoring the fields of a sentence needs
 the harness to place fields that have no fixed place, which is part of stage 4.
+
+SLIP and PPP in HDLC-like framing are the first protocols with byte stuffing, and the
+stuffing is what the stages meet. On 300 frames of seed 3 the line has a byte every
+character time throughout, so no gap is found, with or without timing noise. A flag or an
+escape in the data costs a byte more, so frames of one kind differ in size: SLIP's status
+frames are 12 bytes and sometimes 13, its sample frames 21 and sometimes 22 or 23, and the
+stages, which group by size, make three message types of the three sizes that are frequent
+enough (21, 12 and 22 bytes; the two frames of 23 and the one of 13 are left out as too few)
+where the protocol has two. PPP has three kinds of frame and four types are found, of 17,
+18, 32 and 33 bytes, with five frames left out. (Its LCP echo is always 17 bytes or more
+because its magic number holds a flag byte, which every frame has to stuff.)
+
+No checksum is found in either, for two reasons that belong to the next steps and not to
+the generator. The catalogue does not have CRC-16/X-25, the FCS of HDLC, PPP and X.25. And
+the CRC is over the bytes as they were before the stuffing, which the stage does not undo.
+Measured in a scratch copy of the catalogue with the entry added: the FCS was found for the
+types of 18 and 32 bytes, whose frames have no flag or escape in them (with the leading and
+trailing flag skipped), and not for the other two.
 
 Nothing is found by gaps in the binary protocols because there are none: the frames follow one another
 at the pace of the line. With the frames given, no checksum is found for lack

@@ -56,6 +56,8 @@ add_library(bw_core STATIC
     src/protocols/mavlink1.cpp
     src/protocols/mavlink2.cpp
     src/protocols/nmea0183.cpp
+    src/protocols/slip.cpp
+    src/protocols/hdlc_ppp.cpp
     src/segmentation.cpp
     src/checksum.cpp
     src/fields.cpp
@@ -143,7 +145,8 @@ if(BW_BUILD_TESTS)
         tests/test_kaitai.cpp
         tests/test_ubx_mavlink.cpp
         tests/test_nmea.cpp
-        tests/test_mavlink2.cpp)
+        tests/test_mavlink2.cpp
+        tests/test_stuffing.cpp)
     target_include_directories(bw_tests PRIVATE tests/third_party)
     target_compile_definitions(bw_tests PRIVATE
         "BW_CORPUS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus\""
@@ -196,9 +199,21 @@ if(BW_BUILD_TESTS)
     add_test(NAME cli_protocols_mavlink1 COMMAND bitwise protocols mavlink1)
     set_tests_properties(cli_protocols_mavlink1 PROPERTIES PASS_REGULAR_EXPRESSION
         "message type 1 \"sys_status\".*\"crc\" +checksum.*CRC-16/MCRF4XX seeded with CRC_EXTRA 124")
+    add_test(NAME cli_synth_slip COMMAND bitwise synth slip --seed 1 --frames 2)
+    set_tests_properties(cli_synth_slip PROPERTIES PASS_REGULAR_EXPRESSION
+        "time_ns,channel.*0,uart,,,c0.*86805,uart,,,20.*173610,uart,,,00")
+    add_test(NAME cli_synth_hdlc_ppp COMMAND bitwise synth hdlc-ppp --seed 1 --frames 2)
+    set_tests_properties(cli_synth_hdlc_ppp PROPERTIES PASS_REGULAR_EXPRESSION
+        "time_ns,channel.*0,uart,,,7e.*86805,uart,,,7e.*173610,uart,,,7e.*260415,uart,,,ff.*347220,uart,,,03.*434025,uart,,,80")
+    add_test(NAME cli_protocols_slip COMMAND bitwise protocols slip)
+    set_tests_properties(cli_protocols_slip PROPERTIES PASS_REGULAR_EXPRESSION
+        "framing: between 0xC0, escape 0xDB: 0xC0 as 0xDB 0xDC, 0xDB as 0xDB 0xDD.*message type 0 \"sample\".*\"sequence\" +counter +16 bits @8 big-endian step 1.*message type 1 \"status\".*\"battery\" +payload +16 bits @64")
+    add_test(NAME cli_protocols_hdlc_ppp COMMAND bitwise protocols hdlc-ppp)
+    set_tests_properties(cli_protocols_hdlc_ppp PROPERTIES PASS_REGULAR_EXPRESSION
+        "framing: between 0x7E, escape 0x7D: 0x7E as 0x7D 0x5E, 0x7D as 0x7D 0x5D.*message type 0 \"lcp_echo\".*\"magic_number\" +constant +32 bits @64 big-endian = 0xB7E9A31.*message type 2 \"ip_datagram\".*\"fcs\" +checksum +16 bits @224 little-endian covers 0..3 CRC-16/X-25")
     add_test(NAME cli_synth_unknown COMMAND bitwise synth nope)
     set_tests_properties(cli_synth_unknown PROPERTIES PASS_REGULAR_EXPRESSION
-        "unknown protocol 'nope'; known: mavlink1, mavlink2, modbus-rtu, nmea0183, ubx")
+        "unknown protocol 'nope'; known: hdlc-ppp, mavlink1, mavlink2, modbus-rtu, nmea0183, slip, ubx")
     add_test(NAME cli_synth_bad_number COMMAND bitwise synth modbus-rtu --frames 100001)
     set_tests_properties(cli_synth_bad_number PROPERTIES PASS_REGULAR_EXPRESSION
         "--frames: '100001' is not a whole number from 0 to 100000")
