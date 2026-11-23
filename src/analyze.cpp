@@ -119,12 +119,16 @@ MessageTypeReport Analysis::type_report(std::size_t message_type) const {
 }
 
 Analysis analyze(const Capture& capture, const AnalyzeOptions& options) {
+    return analyze_frames(capture, segment_by_gaps(capture, options.segmentation), options);
+}
+
+Analysis analyze_frames(const Capture& capture, const Segmentation& segmentation,
+                        const AnalyzeOptions& options) {
     AnalysisInfo info;
     info.events = capture.event_count();
     info.bytes  = capture.total_bytes();
 
-    const Segmentation segmentation = segment_by_gaps(capture, options.segmentation);
-    info.segmentation               = segmentation.info();
+    info.segmentation = segmentation.info();
     if (!info.segmentation.found) {
         return Analysis(info, segmentation, Model(), std::vector<MessageTypeReport>());
     }
@@ -146,10 +150,13 @@ Analysis analyze(const Capture& capture, const AnalyzeOptions& options) {
     }
     std::sort(types.begin(), types.end(), more_frequent);
 
+    // What cut the frames is known only when it was the gaps.
     Model model;
     FramingInfo framing;
-    framing.kind        = FramingKind::IdleGap;
-    framing.idle_gap_ns = info.segmentation.idle_gap_ns;
+    if (info.segmentation.idle_gap_ns != 0) {
+        framing.kind        = FramingKind::IdleGap;
+        framing.idle_gap_ns = info.segmentation.idle_gap_ns;
+    }
     model.set_framing(framing);
 
     std::vector<MessageTypeReport> reports;
@@ -181,9 +188,13 @@ std::string describe_analysis(const Analysis& analysis) {
         out += "framing    none found: the gaps between events do not split into short and long ones\n";
         return out + describe_model(analysis.model());
     }
-    out += "framing    idle gap: a gap of at least " + number(seg.idle_gap_ns) + " ns ends a frame (" +
-           number(seg.outer_gaps) + " gaps between frames, " + number(seg.inner_gaps) +
-           " inside them, the longest " + number(seg.longest_inner_gap_ns) + " ns)\n";
+    if (seg.idle_gap_ns == 0) {
+        out += "framing    not looked for: the frames were given\n";
+    } else {
+        out += "framing    idle gap: a gap of at least " + number(seg.idle_gap_ns) + " ns ends a frame (" +
+               number(seg.outer_gaps) + " gaps between frames, " + number(seg.inner_gaps) +
+               " inside them, the longest " + number(seg.longest_inner_gap_ns) + " ns)\n";
+    }
     out += "frames     " + number(info.frames);
     if (info.ignored_frames != 0) {
         out += " (" + number(info.ignored_frames) + " of a size too rare to say anything about)";

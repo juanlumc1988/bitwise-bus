@@ -46,6 +46,11 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
+      # The generators of the synthetic protocols, against a second implementation
+      # of each, in Python, on 336 combinations of seed, size and timing noise.
+      - name: Generators agree with their independent implementation
+        run: python3 tests/mirror/mirror.py --check build/bitwise
+
       # End to end, on frames generated outside the tool: the search has to
       # recover an algorithm it was never told about. No unit test covers
       # argument parsing or file reading.

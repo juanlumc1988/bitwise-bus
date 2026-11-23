@@ -52,6 +52,8 @@ add_library(bw_core STATIC
     src/dataset.cpp
     src/protocol.cpp
     src/protocols/modbus_rtu.cpp
+    src/protocols/ubx.cpp
+    src/protocols/mavlink1.cpp
     src/segmentation.cpp
     src/checksum.cpp
     src/fields.cpp
@@ -136,7 +138,8 @@ if(BW_BUILD_TESTS)
         tests/test_checksum.cpp
         tests/test_fields.cpp
         tests/test_analyze.cpp
-        tests/test_kaitai.cpp)
+        tests/test_kaitai.cpp
+        tests/test_ubx_mavlink.cpp)
     target_include_directories(bw_tests PRIVATE tests/third_party)
     target_compile_definitions(bw_tests PRIVATE
         "BW_CORPUS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus\""
@@ -165,9 +168,21 @@ if(BW_BUILD_TESTS)
     add_test(NAME cli_synth COMMAND bitwise synth modbus-rtu --seed 1 --frames 3)
     set_tests_properties(cli_synth PROPERTIES PASS_REGULAR_EXPRESSION
         "# bitwise-capture 1.*time_ns,channel,direction,id,data.*0,rs485,,,03.*1145833,rs485,,,04")
+    add_test(NAME cli_synth_ubx COMMAND bitwise synth ubx --seed 1 --frames 2)
+    set_tests_properties(cli_synth_ubx PROPERTIES PASS_REGULAR_EXPRESSION
+        "time_ns,channel.*0,uart,,,b5.*86805,uart,,,62.*173610,uart,,,0[0-9a-f]")
+    add_test(NAME cli_synth_mavlink1 COMMAND bitwise synth mavlink1 --seed 1 --frames 2)
+    set_tests_properties(cli_synth_mavlink1 PROPERTIES PASS_REGULAR_EXPRESSION
+        "time_ns,channel.*0,uart,,,fe.*173611,uart,,,[0-9a-f][0-9a-f]")
+    add_test(NAME cli_protocols_ubx COMMAND bitwise protocols ubx)
+    set_tests_properties(cli_protocols_ubx PROPERTIES PASS_REGULAR_EXPRESSION
+        "framing: contiguous, nothing between frames.*message type 0 \"ack_ack\".*message type 2 \"nav_status\".*\"checksum\" +checksum +16 bits @[0-9]+ little-endian covers 2..11 Fletcher-8 \\(UBX\\)")
+    add_test(NAME cli_protocols_mavlink1 COMMAND bitwise protocols mavlink1)
+    set_tests_properties(cli_protocols_mavlink1 PROPERTIES PASS_REGULAR_EXPRESSION
+        "message type 1 \"sys_status\".*\"crc\" +checksum.*CRC-16/MCRF4XX seeded with CRC_EXTRA 124")
     add_test(NAME cli_synth_unknown COMMAND bitwise synth nope)
     set_tests_properties(cli_synth_unknown PROPERTIES PASS_REGULAR_EXPRESSION
-        "unknown protocol 'nope'; known: modbus-rtu")
+        "unknown protocol 'nope'; known: mavlink1, modbus-rtu, ubx")
     add_test(NAME cli_synth_bad_number COMMAND bitwise synth modbus-rtu --frames 100001)
     set_tests_properties(cli_synth_bad_number PROPERTIES PASS_REGULAR_EXPRESSION
         "--frames: '100001' is not a whole number from 0 to 100000")

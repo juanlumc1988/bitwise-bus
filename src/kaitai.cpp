@@ -150,6 +150,17 @@ std::string export_kaitai(const Model& model, std::size_t message_type, const st
         doc += " Frames are separated by silences of at least " + number(framing.idle_gap_ns) + " ns.";
     } else if (framing.kind == FramingKind::ByEvent) {
         doc += " Each capture event is one frame.";
+    } else if (framing.kind == FramingKind::Contiguous) {
+        doc += " Frames follow one another with nothing between them.";
+    } else if (framing.kind == FramingKind::Terminated) {
+        doc += " A frame ends with the byte " + hex_byte(framing.delimiter) + ".";
+    } else if (framing.kind == FramingKind::Flagged) {
+        doc += " A frame lies between two bytes " + hex_byte(framing.delimiter) + ".";
+        if (framing.escaped) {
+            doc += " Inside it " + hex_byte(framing.delimiter) + " is sent as " + hex_byte(framing.escape) + " " +
+                   hex_byte(framing.delimiter_code) + " and " + hex_byte(framing.escape) + " as " +
+                   hex_byte(framing.escape) + " " + hex_byte(framing.escape_code) + ".";
+        }
     }
 
     std::string out = "meta:\n  id: " + id + "\ndoc: " + quoted(doc) + "\n";

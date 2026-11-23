@@ -32,20 +32,36 @@ namespace bw {
 
 // How frames are told apart in the capture. Unknown means the model says
 // nothing about it, as for a model built from frames that were already cut.
-// More kinds (delimiters, byte stuffing, a length prefix) come with the
-// segmentation stage.
+// More kinds (a length prefix that decides where a frame ends, say) come with
+// the segmentation stage.
 enum class FramingKind : std::uint8_t {
-    Unknown = 0,
-    IdleGap = 1,        // two consecutive events whose timestamps are at least
+    Unknown    = 0,
+    IdleGap    = 1,     // two consecutive events whose timestamps are at least
                         //   idle_gap_ns apart are in different frames. Timestamps
                         //   are when an event started and its duration is not
                         //   recorded, so this is all a capture can say.
-    ByEvent = 2         // each event is a frame: a CAN frame, say
+    ByEvent    = 2,     // each event is a frame: a CAN frame, say
+    Contiguous = 3,     // frames follow one another with nothing between them,
+                        //   and where one ends is in its own layout: a fixed
+                        //   size, a length field (UBX, MAVLink)
+    Terminated = 4,     // a frame ends with the byte `delimiter`, which is part of
+                        //   it (NMEA 0183: the line feed after the carriage return)
+    Flagged    = 5      // a frame lies between two bytes `delimiter`: the flag of
+                        //   SLIP and of HDLC. With `escaped`, a flag or an escape
+                        //   byte inside a frame is sent as `escape` and a code
 };
 
 struct FramingInfo {
     FramingKind   kind        = FramingKind::Unknown;
     std::uint64_t idle_gap_ns = 0;      // IdleGap only
+    std::uint8_t  delimiter   = 0;      // Terminated and Flagged only
+    // Flagged only. The byte `delimiter` inside a frame is sent as `escape` then
+    // `delimiter_code`, and the byte `escape` as `escape` then `escape_code`:
+    // SLIP is 0xDB 0xDC and 0xDB 0xDD, HDLC is 0x7D 0x5E and 0x7D 0x5D.
+    bool          escaped        = false;
+    std::uint8_t  escape         = 0;
+    std::uint8_t  delimiter_code = 0;
+    std::uint8_t  escape_code    = 0;
 };
 
 enum class FieldKind : std::uint8_t {
