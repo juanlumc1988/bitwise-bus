@@ -593,8 +593,8 @@ TEST_CASE("flags: the pipeline cuts by flags when it can and by gaps when it can
     CHECK(bw::describe_analysis(h).find(", stuffed: 0x7E as 0x7D 0x5E and 0x7D as 0x7D 0x5D\n") != std::string::npos);
     CHECK(h.info().frames == 300);
 
-    // What the stages make of the frames that the flags found is what they made of the true ones
-    // (the baseline of tests/test_stuffing.cpp): types by size, and no checksum.
+    // The stages read the frames as the protocol sends them, without the flags and with the stuffing undone
+    // (the baseline of tests/test_stuffing.cpp): the two types of SLIP, the three of PPP, and the FCS of PPP.
     typedef std::set<std::pair<std::uint32_t, std::uint32_t> > Types;
     Types slip_types, hdlc_types;
     for (std::size_t t = 0; t < a.type_count(); ++t) {
@@ -603,20 +603,18 @@ TEST_CASE("flags: the pipeline cuts by flags when it can and by gaps when it can
     }
     for (std::size_t t = 0; t < h.type_count(); ++t) {
         hdlc_types.insert(std::make_pair(h.type_report(t).frame_bytes, h.type_report(t).frames));
-        CHECK_FALSE(h.type_report(t).checksum.found);
+        CHECK(h.type_report(t).checksum.found);
     }
     Types slip_expected, hdlc_expected;
-    slip_expected.insert(std::make_pair(21u, 148u));
-    slip_expected.insert(std::make_pair(12u, 135u));
-    slip_expected.insert(std::make_pair(22u, 14u));
-    hdlc_expected.insert(std::make_pair(17u, 102u));
-    hdlc_expected.insert(std::make_pair(18u, 100u));
-    hdlc_expected.insert(std::make_pair(32u, 78u));
-    hdlc_expected.insert(std::make_pair(33u, 15u));
+    slip_expected.insert(std::make_pair(19u, 164u));
+    slip_expected.insert(std::make_pair(10u, 136u));
+    hdlc_expected.insert(std::make_pair(14u, 102u));
+    hdlc_expected.insert(std::make_pair(16u, 102u));
+    hdlc_expected.insert(std::make_pair(30u, 96u));
     CHECK(slip_types == slip_expected);
     CHECK(hdlc_types == hdlc_expected);
-    CHECK(a.info().ignored_frames == 3);
-    CHECK(h.info().ignored_frames == 5);
+    CHECK(a.info().ignored_frames == 0);
+    CHECK(h.info().ignored_frames == 0);
 
     // Modbus RTU has no flag and has gaps: nothing changes.
     const Dataset modbus = make("modbus-rtu", 1, 50, 300);

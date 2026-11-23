@@ -149,7 +149,8 @@ if(BW_BUILD_TESTS)
         tests/test_stuffing.cpp
         tests/test_flags.cpp
         tests/test_sync.cpp
-        tests/test_lines.cpp)
+        tests/test_lines.cpp
+        tests/test_unstuff.cpp)
     target_include_directories(bw_tests PRIVATE tests/third_party)
     target_compile_definitions(bw_tests PRIVATE
         "BW_CORPUS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus\""
@@ -213,7 +214,7 @@ if(BW_BUILD_TESTS)
         "framing: between 0xC0, escape 0xDB: 0xC0 as 0xDB 0xDC, 0xDB as 0xDB 0xDD.*message type 0 \"sample\".*\"sequence\" +counter +16 bits @8 big-endian step 1.*message type 1 \"status\".*\"battery\" +payload +16 bits @64")
     add_test(NAME cli_protocols_hdlc_ppp COMMAND bitwise protocols hdlc-ppp)
     set_tests_properties(cli_protocols_hdlc_ppp PROPERTIES PASS_REGULAR_EXPRESSION
-        "framing: between 0x7E, escape 0x7D: 0x7E as 0x7D 0x5E, 0x7D as 0x7D 0x5D.*message type 0 \"lcp_echo\".*\"magic_number\" +constant +32 bits @64 big-endian = 0xB7E9A31.*message type 2 \"ip_datagram\".*\"fcs\" +checksum +16 bits @224 little-endian covers 0..3 CRC-16/X-25")
+        "framing: between 0x7E, escape 0x7D: 0x7E as 0x7D 0x5E, 0x7D as 0x7D 0x5D.*message type 0 \"lcp_echo\".*\"magic_number\" +constant +32 bits @64 big-endian = 0xB7E9A31.*message type 2 \"ip_datagram\".*\"fcs\" +checksum +16 bits @224 little-endian covers 0..3 CRC-16/IBM-SDLC")
     add_test(NAME cli_synth_unknown COMMAND bitwise synth nope)
     set_tests_properties(cli_synth_unknown PROPERTIES PASS_REGULAR_EXPRESSION
         "unknown protocol 'nope'; known: hdlc-ppp, mavlink1, mavlink2, modbus-rtu, nmea0183, slip, ubx")
@@ -230,15 +231,16 @@ if(BW_BUILD_TESTS)
         COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_modbus_rtu_seed1_50frames_jitter300.csv)
     set_tests_properties(cli_analyze PROPERTIES PASS_REGULAR_EXPRESSION
         "idle gap: a gap of at least 6918373 ns ends a frame.*type0 +8 bytes, 50 frames; checksum CRC-16/MODBUS, 16 bits little-endian, evidence 800 bits.*5 \"checksum\" +checksum +16 bits @48 little-endian covers 0..4")
-    # And on the two captures of byte-stuffed protocols, which have no gaps to cut at: the flags.
+    # And on the two captures of byte-stuffed protocols, which have no gaps to cut at: the flags, and the frames
+    # read without them and unstuffed, so that the FCS of PPP is found.
     add_test(NAME cli_analyze_slip
         COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_slip_seed3_30frames.csv)
     set_tests_properties(cli_analyze_slip PROPERTIES PASS_REGULAR_EXPRESSION
-        "framing +flags: the byte 0xC0 bounds each frame \\(60 of them in the capture\\).*frames +30 \\(3 of a size too rare.*framing: between 0xC0")
+        "framing +flags: the byte 0xC0 bounds each frame \\(60 of them in the capture\\), stuffed.*frames +30\n+type0 +19 bytes, 16 frames; no checksum found.*type1 +10 bytes, 14 frames.*framing: between 0xC0")
     add_test(NAME cli_analyze_hdlc_ppp
         COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_hdlc_ppp_seed2_30frames.csv)
     set_tests_properties(cli_analyze_hdlc_ppp PROPERTIES PASS_REGULAR_EXPRESSION
-        "framing +flags: the byte 0x7E bounds each frame \\(90 of them in the capture\\).*frames +30 \\(2 of a size too rare.*framing: between 0x7E")
+        "framing +flags: the byte 0x7E bounds each frame \\(90 of them in the capture\\), stuffed.*frames +30\n+type0 +14 bytes, 14 frames; checksum CRC-16/IBM-SDLC, 16 bits little-endian, evidence 224 bits.*framing: between 0x7E")
     # And on the three of frames that start with a sync byte and say how long they are.
     add_test(NAME cli_analyze_ubx
         COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_ubx_seed1_30frames.csv)

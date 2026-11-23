@@ -209,6 +209,19 @@ Segmentation segment_by_lines(const Capture& capture, const SegmentationOptions&
 // lines.
 Segmentation segment_frames(const Capture& capture, const SegmentationOptions& options);
 
+// The frames of a segmentation as a capture of their own: one event for each,
+// holding what the frame holds, in the order of the segmentation. A flagged frame
+// (a kind of Flagged) holds what is between its flags: the flags are taken off
+// (a frame that shares its opening flag with the one before has no opening flag
+// to take) and, when the segmentation says `escaped`, the stuffing is undone, so
+// that an escape and the code after it are the one byte they stand for. An
+// escape that is not followed by a code is kept as it is, and so is the byte
+// after it. The frames of any other kind are as they are, their events joined.
+// An event has the channel and the time of the first event of its frame. It is
+// the frame as the later stages read it: the bytes of the protocol, which is
+// what a checksum is taken over and what a field is of.
+Capture frame_contents(const Capture& capture, const Segmentation& segmentation);
+
 // The bytes of a frame, in order, as one run. Throws std::out_of_range for a
 // frame that is not inside the capture.
 std::vector<std::uint8_t> frame_bytes(const Capture& capture, const FrameSpan& frame);

@@ -512,7 +512,7 @@ TEST_CASE("hdlc-ppp: its model is the documented one") {
         CHECK(fcs.covers_first == 0);                                   // from the address, flags not included
         CHECK(fcs.covers_last == last - 1);
         CHECK_FALSE(fcs.ascii_hex);
-        CHECK(m.field_detail(t, last) == "CRC-16/X-25 (the FCS-16 of RFC 1662)");
+        CHECK(m.field_detail(t, last) == "CRC-16/IBM-SDLC");
     }
     CHECK(m.field_name(0, 6) == "magic_number");
     CHECK(m.field(0, 6).constant == 0x0B7E9A31);
@@ -745,9 +745,9 @@ TEST_CASE("slip and hdlc-ppp: a byte every character time, and the noise moves t
 
 // ---- Where the stages start ------------------------------------------------
 
-TEST_CASE("slip and hdlc-ppp baseline: no gaps to cut at, and types that follow the stuffing, not the protocol") {
-    // The first stuffed protocols, and what the stages that exist do with them, which the next steps of wave 1
-    // change (docs/roadmap.md). Nothing is found by gaps: the bytes are a character apart throughout.
+TEST_CASE("slip and hdlc-ppp baseline: no gaps to cut at; the frames as they come, and as the stages read them") {
+    // The first stuffed protocols, and what the stages do with them (docs/roadmap.md). Nothing is found by gaps:
+    // the bytes are a character apart throughout.
     const char* names[2] = { "slip", "hdlc-ppp" };
     for (int n = 0; n < 2; ++n) {
         for (unsigned jitter = 0; jitter <= 300; jitter += 300) {
@@ -757,44 +757,69 @@ TEST_CASE("slip and hdlc-ppp baseline: no gaps to cut at, and types that follow 
         }
     }
 
-    // Given the true frames, with their flags and as they are on the line, a message type is a size. The
-    // stuffing makes the frames of a kind differ in size, so there are more types than the protocol has
-    // (3 for 2 in SLIP, 4 for 3 in HDLC), the frames of the rarest sizes are left out for being too few, and
-    // a checksum is found in none. The numbers are those of seed 3, 300 frames.
-    //
-    // For HDLC, two things stand between this and the FCS, and both are for the stage 2 of wave 1: the
-    // catalogue does not have CRC-16/X-25, and the CRC is over the bytes as they were before the stuffing,
-    // so that a frame that has an escape in it is not one the search lines up. (With the entry added to a
-    // copy of the catalogue, the FCS of the frames without an escape was found, and the others were not.)
-    struct Expected {
-        const char*   name;
-        std::uint64_t ignored;
-        std::set<std::pair<std::uint32_t, std::uint32_t> > types;     // (size, frames)
-    };
-    Expected expected[2];
-    expected[0].name    = "slip";
-    expected[0].ignored = 3;
-    expected[0].types.insert(std::make_pair(21u, 148u));
-    expected[0].types.insert(std::make_pair(12u, 135u));
-    expected[0].types.insert(std::make_pair(22u, 14u));
-    expected[1].name    = "hdlc-ppp";
-    expected[1].ignored = 5;
-    expected[1].types.insert(std::make_pair(17u, 102u));
-    expected[1].types.insert(std::make_pair(18u, 100u));
-    expected[1].types.insert(std::make_pair(32u, 78u));
-    expected[1].types.insert(std::make_pair(33u, 15u));
+    typedef std::set<std::pair<std::uint32_t, std::uint32_t> > Types;       // (size, frames)
+    const std::uint64_t ignored_wire[2] = { 3, 5 };
+    Types wire[2], read[2];
+    wire[0].insert(std::make_pair(21u, 148u));        // SLIP, as it is on the line: 12 or 13 bytes for a status, 21 to 23 a sample
+    wire[0].insert(std::make_pair(12u, 135u));
+    wire[0].insert(std::make_pair(22u, 14u));
+    wire[1].insert(std::make_pair(17u, 102u));        // PPP: the LCP echo has a flag in its magic number, always stuffed
+    wire[1].insert(std::make_pair(18u, 100u));
+    wire[1].insert(std::make_pair(32u, 78u));
+    wire[1].insert(std::make_pair(33u, 15u));
+    read[0].insert(std::make_pair(19u, 164u));        // the same, as the protocol sends it, with the stuffing undone
+    read[0].insert(std::make_pair(10u, 136u));
+    read[1].insert(std::make_pair(14u, 102u));
+    read[1].insert(std::make_pair(16u, 102u));
+    read[1].insert(std::make_pair(30u, 96u));
     for (int n = 0; n < 2; ++n) {
-        INFO(expected[n].name);
-        const Dataset d = make(expected[n].name, 3, 300);
+        INFO(names[n]);
+        const Dataset d = make(names[n], 3, 300);
+
+        // Given the true frames as they are on the line, with their flags and their stuffing, which are not
+        // said to be either, a message type is a size: the stuffing makes the frames of a kind differ in size, so
+        // there are more types than the protocol has (3 for 2 in SLIP, 4 for 3 in HDLC), the frames of the rarest
+        // sizes are left out for being too few, and the FCS of HDLC (CRC-16/IBM-SDLC, which the catalogue has
+        // since it is the one of RFC 1662) is found where nothing in the frame was stuffed, which are the types
+        // of 18 and 32 bytes, with the flags skipped, and not in the others.
         bw::SegmentationInfo info;
         info.found = true;
-        const bw::Analysis a = bw::analyze_frames(d.capture(), bw::Segmentation(info, d.frames()), bw::AnalyzeOptions());
-        std::set<std::pair<std::uint32_t, std::uint32_t> > found;
-        for (std::size_t t = 0; t < a.type_count(); ++t) {
-            found.insert(std::make_pair(a.type_report(t).frame_bytes, a.type_report(t).frames));
-            CHECK_FALSE(a.type_report(t).checksum.found);
+        const bw::Analysis given = bw::analyze_frames(d.capture(), bw::Segmentation(info, d.frames()), bw::AnalyzeOptions());
+        Types found;
+        for (std::size_t t = 0; t < given.type_count(); ++t) {
+            const bw::MessageTypeReport r = given.type_report(t);
+            found.insert(std::make_pair(r.frame_bytes, r.frames));
+            const bool unstuffed = n == 1 && (r.frame_bytes == 18 || r.frame_bytes == 32);
+            CAPTURE(r.frame_bytes);
+            CHECK(r.checksum.found == unstuffed);
+            if (unstuffed) {
+                CHECK(bw::checksum_algorithm_name(r.checksum.algorithm) == "CRC-16/IBM-SDLC");
+                CHECK(r.checksum.header_skip == 1);
+                CHECK(r.checksum.trailer_skip == 1);
+            }
         }
-        CHECK(found == expected[n].types);
-        CHECK(a.info().ignored_frames == expected[n].ignored);
+        CHECK(found == wire[n]);
+        CHECK(given.info().ignored_frames == ignored_wire[n]);
+
+        // Cut by the stage as it is (the flags, with the stuffing the capture shows), the stages read what the
+        // protocol sends: the types it has, all of their frames, and the FCS in every one of the types of HDLC.
+        const bw::Analysis piped = bw::analyze(d.capture(), bw::AnalyzeOptions());
+        Types seen;
+        for (std::size_t t = 0; t < piped.type_count(); ++t) {
+            const bw::MessageTypeReport r = piped.type_report(t);
+            seen.insert(std::make_pair(r.frame_bytes, r.frames));
+            CAPTURE(r.frame_bytes);
+            CHECK(r.checksum.found == (n == 1));
+            if (n == 1) {
+                CHECK(bw::checksum_algorithm_name(r.checksum.algorithm) == "CRC-16/IBM-SDLC");
+                CHECK(r.checksum.header_skip == 0);                         // from the address
+                CHECK(r.checksum.trailer_skip == 0);
+                CHECK(r.checksum.width_bits == 16);
+                CHECK(r.checksum.byte_order == bw::ByteOrder::Little);
+                CHECK(r.checksum.evidence_bits >= 16 * 60);
+            }
+        }
+        CHECK(seen == read[n]);
+        CHECK(piped.info().ignored_frames == 0);
     }
 }

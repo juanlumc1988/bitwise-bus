@@ -297,9 +297,14 @@ later, and several will lean on code written for Track A.
      another kind (an ETX, a NUL after binary data) is not found. The pipeline cuts
      by flags if the capture has them, by gaps if it has them, and by a sync byte
      and a length or by lines if not, or where they cut the gaps' frames finer;
-  5. stage 2: Fletcher-8, a CRC with a hidden seed byte, checksums written as
-     text, CRC-16/X-25 (the catalogue does not have it, and it is the FCS of HDLC,
-     PPP and X.25), and a CRC over the bytes once stuffing is taken out;
+  5. stage 2, in steps. (a) Done: the later stages read the frames as the protocol
+     sends them (`frame_contents` in `bw/segmentation.h`: flags off, stuffing
+     undone), and the catalogue has CRC-16/IBM-SDLC (X-25), the FCS of HDLC, PPP and
+     X.25, so that the FCS of PPP is found in every kind of frame. The rest, in the
+     order it is likely to go in: Fletcher-8 and the simple checksums, written as
+     text too (UBX, and the `*hh` of NMEA); more CRCs of the catalogue; and a CRC
+     with a hidden seed byte (MAVLink's CRC_EXTRA), which needs the frames grouped
+     by message id and so belongs partly to stage 4;
   6. stages 4 and 5: length fields, fields of varying size, text, and the
      numbers of two bytes whose high byte never changes.
 - **Versions.** A minor version once the skeleton works, and one per completed
@@ -357,27 +362,37 @@ sizes: they make seven message types where there are three, none with a checksum
 (it is an exclusive or, written as text). Scoring the fields of a sentence needs
 the harness to place fields that have no fixed place, which is part of stage 4.
 
-SLIP and PPP in HDLC-like framing are the first protocols with byte stuffing, and the
-stuffing is what the stages meet. On 300 frames of seed 3 the line has a byte every
-character time throughout, so no gap is found, with or without timing noise, but both are
-cut exactly by their flags (stage 3, step a): on 200 frames of seeds 1 to 4, with and without
-timing noise, every frame found is a true frame, and the idle flags of PPP are in none. A flag or an
-escape in the data costs a byte more, so frames of one kind differ in size: SLIP's status
-frames are 12 bytes and sometimes 13, its sample frames 21 and sometimes 22 or 23, and the
-stages, which group by size, make three message types of the three sizes that are frequent
-enough (21, 12 and 22 bytes; the two frames of 23 and the one of 13 are left out as too few)
-where the protocol has two; this is the same with the frames that the flags find as with the
-true ones, and `bitwise analyze` on a capture of either now says `framing: between 0xC0` (or
-0x7E) and not that it found none. PPP has three kinds of frame and four types are found, of 17,
-18, 32 and 33 bytes, with five frames left out. (Its LCP echo is always 17 bytes or more
-because its magic number holds a flag byte, which every frame has to stuff.)
+SLIP and PPP in HDLC-like framing are the first protocols with byte stuffing. On 300
+frames of seed 3 the line has a byte every character time throughout, so no gap is found,
+with or without timing noise, but both are cut exactly by their flags (stage 3): on 200
+frames of seeds 1 to 4, with and without timing noise, every frame found is a true frame,
+and the idle flags of PPP are in none. A flag or an escape in the data costs a byte more,
+so frames of one kind differ in size on the line: SLIP's status frames are 12 bytes and
+sometimes 13, its sample frames 21 and sometimes 22 or 23, and PPP's LCP echo is always 17
+bytes or more because its magic number holds a flag byte. Read as they come, the stages,
+which group by size, make three message types for SLIP's two records and four for PPP's three,
+leave out the frames of the rarest sizes, and find the FCS of PPP only in the frames that
+had nothing to stuff, with the flags skipped (the types of 18 and 32 bytes). Read as the
+protocol sends them (`frame_contents`: the flags off and the stuffing undone, which is what
+the model describes and what a CRC is taken over), SLIP has its two types, of 19 and 10
+bytes, and PPP its three, of 14, 16 and 30, none of them left out, and **the FCS of PPP is
+found in all three** (CRC-16/IBM-SDLC, 16 bits, little-endian, from the address): the same
+checksum as the truth, in position, width, order, coverage and algorithm. Before that the
+catalogue had no CRC-16/X-25, the FCS of HDLC, PPP and X.25, and the search was over the
+bytes with their stuffing in.
 
-No checksum is found in either, for two reasons that belong to the next steps and not to
-the generator. The catalogue does not have CRC-16/X-25, the FCS of HDLC, PPP and X.25. And
-the CRC is over the bytes as they were before the stuffing, which the stage does not undo.
-Measured in a scratch copy of the catalogue with the entry added: the FCS was found for the
-types of 18 and 32 bytes, whose frames have no flag or escape in them (with the leading and
-trailing flag skipped), and not for the other two.
+| Protocol, message | Checksum | Fields, truth / found | Boundaries, truth / found / hit | Exact | Kind |
+|---|---|---|---|---|---|
+| SLIP sample | none | 9 / 6 | 10 / 7 / 4 | 1 | 1 |
+| SLIP status | none | 5 / 9 | 6 / 10 / 6 | 2 | 2 |
+| PPP LCP echo | CRC-16/IBM-SDLC | 8 / 13 | 9 / 14 / 9 | 5 | 5 |
+| PPP IPCP request | CRC-16/IBM-SDLC | 10 / 15 | 11 / 16 / 11 | 7 | 7 |
+| PPP IP datagram | CRC-16/IBM-SDLC | 5 / 6 | 6 / 7 / 6 | 4 | 4 |
+
+On 200 frames of seed 3, cut by the stage as it is; pinned by `tests/test_unstuff.cpp`. The
+SLIP rows are low because their fields are numbers that the stages do not yet type (a sequence
+number of 16 bits whose high byte never changes, a time in milliseconds, readings of 16 bits
+that are random): the checksum column is as good as it can be, and the rest is for stages 4 and 5.
 
 Nothing is found by gaps in the binary protocols because there are none: the frames follow one another
 at the pace of the line. With the frames given, no checksum is found for lack
@@ -514,6 +529,14 @@ the reason the README gives for `rewind-mcu`.
   by lines where the gaps find the seconds (the 90 true sentences, the byte, the
   count), `FramingKind.Terminated` as an enum, the line of `describe_analysis`, and
   UBX, MAVLink and Modbus RTU as before.
+
+  **After the unstuffing of stage 2** (`frame_contents`, a function that returns a
+  `Capture`, which bridgefex already wraps) it was the same once more: the same 45
+  files, no change to the headers or the annotations. From Python, 16 checks pass:
+  `frame_contents` of SLIP and PPP, with one event per frame and the sizes the
+  protocols have once unstuffed (19 and 10; 14, 16 and 30), `analyze` finding their
+  types, the FCS of PPP in each of the three (`CRC-16/IBM-SDLC`, 16 bits, from the
+  address to the end), and the frames of UBX as they are.
 
   Not tried: any platform other than Linux x86-64, threads, callbacks and
   directors, large captures, Python versions other than 3.13. To repeat the

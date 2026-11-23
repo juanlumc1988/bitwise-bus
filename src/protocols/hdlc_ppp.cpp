@@ -126,7 +126,9 @@ public:
             FieldInfo fcs = field(FieldKind::Checksum, 16, ByteOrder::Little);
             fcs.covers_first = 0;                                           // from the address
             fcs.covers_last  = static_cast<std::uint32_t>(last);
-            model.add_field(t, "fcs", fcs, "CRC-16/X-25 (the FCS-16 of RFC 1662)");
+            // CRC-16/X-25 of RFC 1662's FCS-16, under the name of the catalogue (X-25 is the alias), so that
+            // a checksum found is the one that is here.
+            model.add_field(t, "fcs", fcs, "CRC-16/IBM-SDLC");
         }
         return model;
     }
