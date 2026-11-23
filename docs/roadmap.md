@@ -272,8 +272,17 @@ later, and several will lean on code written for Track A.
   3. SLIP and HDLC/PPP (byte stuffing: the model describes the frame as it is
      once the stuffing is taken out; done: `src/protocols/slip.cpp` and
      `src/protocols/hdlc_ppp.cpp`);
-  4. stage 3: frames cut by a sync pattern and a length, by terminators, and by
-     flags with stuffing, with a checksum that validates a cut as evidence for it;
+  4. stage 3, in two steps. (a) Frames bounded by a flag on both sides, which is
+     what SLIP and HDLC have (done: `segment_by_flags` in `bw/segmentation.h`; the
+     pipeline cuts by flags if the capture has them and by gaps if not). (b) Frames
+     cut by terminators, by a flag that two frames share, and by a sync pattern and
+     a length, together, with a checksum that validates a cut as evidence for it.
+     They go together because a byte that occurs once in each frame cuts it
+     somewhere, and the bytes alone do not say whether that is its end, its start
+     or the middle of it: on 200 UBX frames a terminator at 0xB5 and one at 0x62
+     both make 200 frames, each shifted from the true ones, and on 200 NMEA
+     sentences a line feed, a carriage return, `$` and `P` all do. The length is
+     the evidence that tells a terminator from a start and a sync pattern;
   5. stage 2: Fletcher-8, a CRC with a hidden seed byte, checksums written as
      text, CRC-16/X-25 (the catalogue does not have it, and it is the FCS of HDLC,
      PPP and X.25), and a CRC over the bytes once stuffing is taken out;
@@ -324,12 +333,16 @@ the harness to place fields that have no fixed place, which is part of stage 4.
 
 SLIP and PPP in HDLC-like framing are the first protocols with byte stuffing, and the
 stuffing is what the stages meet. On 300 frames of seed 3 the line has a byte every
-character time throughout, so no gap is found, with or without timing noise. A flag or an
+character time throughout, so no gap is found, with or without timing noise, but both are
+cut exactly by their flags (stage 3, step a): on 200 frames of seeds 1 to 4, with and without
+timing noise, every frame found is a true frame, and the idle flags of PPP are in none. A flag or an
 escape in the data costs a byte more, so frames of one kind differ in size: SLIP's status
 frames are 12 bytes and sometimes 13, its sample frames 21 and sometimes 22 or 23, and the
 stages, which group by size, make three message types of the three sizes that are frequent
 enough (21, 12 and 22 bytes; the two frames of 23 and the one of 13 are left out as too few)
-where the protocol has two. PPP has three kinds of frame and four types are found, of 17,
+where the protocol has two; this is the same with the frames that the flags find as with the
+true ones, and `bitwise analyze` on a capture of either now says `framing: between 0xC0` (or
+0x7E) and not that it found none. PPP has three kinds of frame and four types are found, of 17,
 18, 32 and 33 bytes, with five frames left out. (Its LCP echo is always 17 bytes or more
 because its magic number holds a flag byte, which every frame has to stuff.)
 

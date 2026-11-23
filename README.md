@@ -298,17 +298,19 @@ without timing there is no framing and it says so.
 
 Six protocols of the first wave of the corpus (UBX, MAVLink 1 and MAVLink 2,
 binary; NMEA 0183, text; SLIP and PPP in HDLC-like framing, byte stuffing) are there to
-be generated, and today `analyze` makes little of them. UBX, MAVLink and the two stuffed
-protocols have no gap to cut at, since their frames follow one another at the pace of the
-line, and the checksums of the first three (Fletcher-8, and a CRC with a seed that is not in
-the frame) and the FCS of PPP (a CRC that is not in the catalogue, over bytes as they were
-before the stuffing) are not ones it knows. The frames of MAVLink 2 differ in length for
-the same message, because the zeros at the end of a payload are not sent, and those of SLIP
-and PPP, because a flag or an escape in the data costs a byte more. NMEA sentences differ
-in length and come three at a time with a second of silence after them, so the gaps find the
-seconds and not the sentences, and the exclusive-or checksum is written as two hexadecimal
-characters. That is the starting point of the next steps of the
-[roadmap](docs/roadmap.md), measured in its table of the baseline.
+be generated, and today `analyze` makes little of them. SLIP and PPP follow each other at
+the pace of the line, but a flag byte bounds each frame, and `analyze` cuts them there; what
+it makes of them next is limited by the stuffing (a flag or an escape in the data costs a
+byte more, so the frames of a kind differ in size) and, for PPP, by an FCS that is a CRC
+that is not in the catalogue, over bytes as they were before the stuffing. UBX and MAVLink
+frames follow one another with nothing between, so there is no gap to cut at and no flag, and
+their checksums (Fletcher-8, and a CRC with a seed that is not in the frame) are not ones it
+knows. The frames of MAVLink 2 also differ in length for the same message, because the
+zeros at the end of a payload are not sent. NMEA sentences differ in length and come three
+at a time with a second of silence after them, so the gaps find the seconds and not the
+sentences, and the exclusive-or checksum is written as two hexadecimal characters. That is
+the starting point of the next steps of the [roadmap](docs/roadmap.md), measured in its
+table of the baseline.
 
 ## What this does not do yet
 
