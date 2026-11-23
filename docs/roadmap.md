@@ -186,7 +186,7 @@ published test vectors before it enters the corpus.
 | Protocol | Framing | Checksum | What it stresses | Wave |
 |---|---|---|---|---|
 | Modbus RTU | idle gap | CRC-16/MODBUS, little-endian | timing segmentation, function-code discriminator, request/response lengths | skeleton |
-| NMEA 0183 | `$` … `*hh` CRLF, text | XOR, written as ASCII hex | text framing, variable-length comma-separated fields | 1 |
+| NMEA 0183 | `$` … `*hh` CRLF, text | XOR, written as ASCII hex | text framing, variable-length comma-separated fields | 1 (done) |
 | SLIP | `0xC0` delimiter, `0xDB` escape | none | byte stuffing | 1 |
 | HDLC / PPP async | `0x7E` flag, `0x7D` escape | CRC-16/X-25 | stuffing, then a CRC over the de-stuffed bytes | 1 |
 | MAVLink 1 and 2 | start byte and length | CRC-16 with a per-message extra seed | a hidden seed, sequence counter, length field, message-id discriminator | 1 (version 1 done) |
@@ -264,10 +264,11 @@ later, and several will lean on code written for Track A.
   1. the model says contiguous, terminated and flagged framing, and UBX and
      MAVLink 1 are generated, with an independent implementation and the
      baseline (done: `bw/model.h`, `tests/mirror/mirror.py`);
-  2. MAVLink 2 (flags, a message id of three bytes, and a payload whose trailing
-     zeros are cut, so that frames of one message differ in length) and NMEA 0183
-     (text, and a checksum written as two hex characters, which the model
-     has to be able to say);
+  2. NMEA 0183 (text, fields of varying length, some of them empty, and a
+     checksum written as two hex characters, which the model now can say; done:
+     `src/protocols/nmea0183.cpp`), then MAVLink 2 (flags, a message id of
+     three bytes, and a payload whose trailing zeros are cut, so that frames of
+     one message differ in length);
   3. SLIP and HDLC/PPP (byte stuffing: the model describes the frame as it is
      once the stuffing is taken out);
   4. stage 3: frames cut by a sync pattern and a length, by terminators, and by
@@ -304,7 +305,16 @@ field with the position and size of a true one, `kind` also its kind. Pinned by
 | MAVLink 1 SYS_STATUS | none | none | 20 / 37 | 21 / 38 / 20 | 6 | 4 |
 | MAVLink 1 ATTITUDE | none | none | 14 / 23 | 15 / 24 / 15 | 7 | 4 |
 
-Nothing is found by gaps because there are none: the frames follow one another
+NMEA 0183 is of another kind and has its own baseline, on 90 sentences of
+seed 3: by gaps, 30 frames are found where there are 90, none of them a true
+sentence (they are the seconds, three sentences each), and every cut it makes is
+a real one, so 31 of the 91 true boundaries are hit. With the true sentences
+given, the stages group them by size, and the sentences of two kinds share
+sizes: they make seven message types where there are three, none with a checksum
+(it is an exclusive or, written as text). Scoring the fields of a sentence needs
+the harness to place fields that have no fixed place, which is part of stage 4.
+
+Nothing is found by gaps in the binary protocols because there are none: the frames follow one another
 at the pace of the line. With the frames given, no checksum is found for lack
 of the algorithm, and the fields are cut too fine and typed with few of the
 kinds the truth has: a two-byte number with a high byte that never changes is two

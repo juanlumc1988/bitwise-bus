@@ -102,6 +102,9 @@ std::string doc_of(const Model& model, std::size_t type, std::size_t index, cons
         doc += ", " + detail;
     }
     if (info.kind == FieldKind::Checksum) {
+        if (info.ascii_hex) {
+            doc += ", written as hexadecimal text";
+        }
         doc += ", over " + model.field_name(type, info.covers_first) + " to " +
                model.field_name(type, info.covers_last) + " (Kaitai does not check it)";
     }
@@ -174,7 +177,7 @@ std::string export_kaitai(const Model& model, std::size_t message_type, const st
         const std::uint32_t bytes = info.bit_size / 8;
         if (info.kind == FieldKind::Constant) {
             out += "    contents: " + contents_of(info) + "\n";
-        } else if (info.kind == FieldKind::Text) {
+        } else if (info.kind == FieldKind::Text || info.ascii_hex) {
             out += "    type: str\n    size: " + number(bytes) + "\n    encoding: ASCII\n";
         } else if (is_number(info.kind) && !number_type(info).empty()) {
             out += "    type: " + number_type(info) + "\n";

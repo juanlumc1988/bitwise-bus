@@ -141,6 +141,16 @@ std::size_t Model::add_field(std::size_t message_type, const std::string& name,
         refuse(who + " is not a number and has no byte order");
     }
 
+    if (info.ascii_hex) {
+        if (info.kind != FieldKind::Checksum) {
+            refuse(who + " is written as hexadecimal text but is not a Checksum");
+        }
+        if (info.bit_size % 16 != 0 || info.byte_order != ByteOrder::Big) {
+            refuse(who + " is written as hexadecimal text: two characters for each byte of the value, "
+                         "most significant first, so a multiple of 16 bits and big-endian");
+        }
+    }
+
     if (info.kind == FieldKind::Constant && info.bit_size < 64 &&
         (info.constant >> info.bit_size) != 0) {
         refuse(who + " has a constant that does not fit in " + number(info.bit_size) + " bits");
@@ -288,6 +298,7 @@ std::string describe_model(const Model& model) {
             out += position.fixed ? " @" + number(position.bit_offset) : std::string(" @?");
             if (info.byte_order == ByteOrder::Big)    out += " big-endian";
             if (info.byte_order == ByteOrder::Little) out += " little-endian";
+            if (info.ascii_hex) out += " as hex text";
             if (info.kind == FieldKind::Constant) {
                 out += " = " + hex(info.constant);
             }

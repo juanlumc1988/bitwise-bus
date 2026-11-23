@@ -225,6 +225,20 @@ TEST_CASE("kaitai: the doc says what the model found, with the detail and the ev
     CHECK(doc_of(checked.out()) == "\"checksum, CRC-16/CCITT-FALSE, over f to g (Kaitai does not check it)\"");
 }
 
+TEST_CASE("kaitai: a checksum written as hexadecimal text is a string, not a number") {
+    OneType t;
+    t.add("f", fixed(FieldKind::Payload, 24));
+    FieldInfo crc = fixed(FieldKind::Checksum, 16, ByteOrder::Big);
+    crc.ascii_hex    = true;
+    crc.covers_first = 0;
+    crc.covers_last  = 0;
+    t.add("c", crc, "XOR of the characters between $ and *");
+    const std::string ksy = t.out();
+    CHECK(ksy.find("  - id: c\n    type: str\n    size: 2\n    encoding: ASCII\n") != std::string::npos);
+    CHECK(doc_of(ksy) ==
+          "\"checksum, XOR of the characters between $ and *, written as hexadecimal text, over f to f (Kaitai does not check it)\"");
+}
+
 TEST_CASE("kaitai: text in a doc is written so that YAML reads it back as it is") {
     OneType t;
     t.add("f", fixed(FieldKind::Payload, 8), "say \"hi\"\\ \n\ttab \x01 end");

@@ -115,12 +115,24 @@ MAVLINK = {
 }
 
 
+def nmea_checksum(body):
+    """The exclusive or of the characters between the $ and the *, as two upper-case hex digits."""
+    value = 0
+    for ch in body.encode("ascii"):
+        value ^= ch
+    return "%02X" % value
+
+
 def self_check():
     assert crc16_modbus(b"123456789") == 0x4B37                       # CRC-16/MODBUS
     assert mcrf4xx(b"123456789") == 0x6F91                             # CRC-16/MCRF4XX
     # UBX-ACK-ACK acknowledging CFG-MSG, and the poll of UBX-CFG-PRT, from the u-blox documentation.
     assert fletcher8([0x05, 0x01, 0x02, 0x00, 0x06, 0x01]) == (0x0F, 0x38)
     assert fletcher8([0x06, 0x00, 0x00, 0x00]) == (0x06, 0x18)
+    # Sentences as they are written in the NMEA 0183 descriptions that circulate (GGA, RMC, GLL).
+    assert nmea_checksum("GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,") == "47"
+    assert nmea_checksum("GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W") == "6A"
+    assert nmea_checksum("GPGLL,4916.45,N,12311.12,W,225444,A,") == "1D"
     for name, (msg_id, fields, size, extra) in MAVLINK.items():
         sizes = {"uint32_t": 4, "float": 4, "uint16_t": 2, "int16_t": 2, "uint8_t": 1, "int8_t": 1}
         assert sum(sizes[t] for t, _ in fields) == size, name
@@ -230,7 +242,70 @@ def mavlink1(seed, frames, jitter):
     return csv("uart", events)
 
 
-GENERATORS = {"modbus-rtu": modbus_rtu, "ubx": ubx, "mavlink1": mavlink1}
+def nmea0183(seed, frames, jitter):
+    char_ns = 10 * 1_000_000_000 // 4800
+    max_delay = char_ns * jitter // 1000
+    lat_range, lon_range = 90 * 6_000_000, 180 * 6_000_000
+    rng = SplitMix64(seed)
+    seconds = rng.below(86400)
+    south = rng.below(2) == 1
+    west = rng.below(2) == 1
+    lat = rng.below(lat_range)
+    lon = rng.below(lon_range)
+    day = 1 + rng.below(28)
+    month = 1 + rng.below(12)
+    year = 20 + rng.below(10)
+    date = "%02d%02d%02d" % (day, month, year)
+    geoid = rng.below(800) - 400
+    separation = ("-" if geoid < 0 else "") + tenths(abs(geoid))
+
+    def position(units, digits):
+        degrees, rest = divmod(units, 6_000_000)
+        return "%0*d%02d.%05d" % (digits, degrees, rest // 100000, rest % 100000)
+
+    events, at = [], 0
+    clock = lat_text = lon_text = ""
+    altitude = 0
+    for i in range(frames):
+        kind = i % 3
+        if kind == 0:
+            lat = (lat + lat_range - 1000 + rng.below(2001)) % lat_range
+            lon = (lon + lon_range - 1000 + rng.below(2001)) % lon_range
+            altitude = rng.below(20000)
+            seconds = (seconds + (0 if i == 0 else 1)) % 86400
+            clock = "%02d%02d%02d.00" % (seconds // 3600, (seconds // 60) % 60, seconds % 60)
+            lat_text, lon_text = position(lat, 2), position(lon, 3)
+            at = (i // 3) * 1_000_000_000
+        ns, ew = ("S" if south else "N"), ("W" if west else "E")
+        if kind == 0:
+            quality = [1, 1, 1, 2, 4][rng.below(5)]
+            satellites = 4 + rng.below(9)
+            hdop = 5 + rng.below(30)
+            body = "GPGGA," + ",".join([clock, lat_text, ns, lon_text, ew, str(quality), "%02d" % satellites,
+                                        tenths(hdop), tenths(altitude), "M", separation, "M", "", ""])
+        elif kind == 1:
+            valid = rng.below(4) != 3
+            speed = rng.below(1500)
+            course = rng.below(3600)
+            differential = rng.below(2) == 1
+            body = "GPRMC," + ",".join([clock, "A" if valid else "V", lat_text, ns, lon_text, ew, tenths(speed),
+                                        tenths(course), date, "", "", "D" if differential else "A"])
+        else:
+            course = rng.below(3600)
+            speed = rng.below(1500)
+            differential = rng.below(2) == 1
+            body = "GPVTG," + ",".join([tenths(course), "T", "", "M", tenths(speed), "N",
+                                        tenths(speed * 1852 // 1000), "K", "D" if differential else "A"])
+        text = "$" + body + "*" + nmea_checksum(body) + "\r\n"
+        at = emit(rng, at, char_ns, max_delay, list(text.encode("ascii")), events)
+    return csv("uart", events)
+
+
+def tenths(value):
+    return "%d.%d" % (value // 10, value % 10)
+
+
+GENERATORS = {"modbus-rtu": modbus_rtu, "ubx": ubx, "mavlink1": mavlink1, "nmea0183": nmea0183}
 
 # The captures that tests/corpus holds: file name, protocol, seed, frames, jitter.
 CORPUS = [
@@ -239,6 +314,8 @@ CORPUS = [
     ("synth_modbus_rtu_seed1_50frames_jitter300.csv", "modbus-rtu", 1, 50, 300),
     ("synth_ubx_seed1_30frames.csv", "ubx", 1, 30, 0),
     ("synth_ubx_seed3_40frames_jitter300.csv", "ubx", 3, 40, 300),
+    ("synth_nmea0183_seed1_6frames.csv", "nmea0183", 1, 6, 0),
+    ("synth_nmea0183_seed3_9frames_jitter300.csv", "nmea0183", 3, 9, 300),
     ("synth_mavlink1_seed1_30frames.csv", "mavlink1", 1, 30, 0),
     ("synth_mavlink1_seed3_40frames_jitter300.csv", "mavlink1", 3, 40, 300),
 ]
