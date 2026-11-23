@@ -6,7 +6,9 @@
 #include <algorithm>
 #include <stdexcept>
 
+#include "protocols/mavlink1.h"
 #include "protocols/modbus_rtu.h"
+#include "protocols/ubx.h"
 
 namespace bw {
 
@@ -18,7 +20,9 @@ bool by_name(const Protocol* a, const Protocol* b) {
 
 std::vector<const Protocol*> make_registry() {
     std::vector<const Protocol*> list;
+    list.push_back(&mavlink1_protocol());
     list.push_back(&modbus_rtu_protocol());
+    list.push_back(&ubx_protocol());
     std::sort(list.begin(), list.end(), by_name);
     return list;
 }

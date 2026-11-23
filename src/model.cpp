@@ -57,6 +57,19 @@ void Model::set_framing(const FramingInfo& framing) {
     if (framing.kind != FramingKind::IdleGap && framing.idle_gap_ns != 0) {
         refuse("idle_gap_ns belongs to idle-gap framing only");
     }
+    const bool delimited = framing.kind == FramingKind::Terminated || framing.kind == FramingKind::Flagged;
+    if (!delimited && framing.delimiter != 0) {
+        refuse("a delimiter belongs to terminated and flagged framing only");
+    }
+    if (framing.escaped && framing.kind != FramingKind::Flagged) {
+        refuse("an escape belongs to flagged framing only");
+    }
+    if (!framing.escaped && (framing.escape != 0 || framing.delimiter_code != 0 || framing.escape_code != 0)) {
+        refuse("the escape and its codes are set without `escaped`");
+    }
+    if (framing.escaped && (framing.escape == framing.delimiter || framing.delimiter_code == framing.escape_code)) {
+        refuse("the escape byte differs from the delimiter, and so do the two codes");
+    }
     framing_ = framing;
 }
 
@@ -226,6 +239,20 @@ std::string describe_model(const Model& model) {
             break;
         case FramingKind::ByEvent:
             out += "one frame per event";
+            break;
+        case FramingKind::Contiguous:
+            out += "contiguous, nothing between frames";
+            break;
+        case FramingKind::Terminated:
+            out += "ends with " + hex(framing.delimiter);
+            break;
+        case FramingKind::Flagged:
+            out += "between " + hex(framing.delimiter);
+            if (framing.escaped) {
+                out += ", escape " + hex(framing.escape) + ": " + hex(framing.delimiter) + " as " +
+                       hex(framing.escape) + " " + hex(framing.delimiter_code) + ", " +
+                       hex(framing.escape) + " as " + hex(framing.escape) + " " + hex(framing.escape_code);
+            }
             break;
     }
     out += "\n";

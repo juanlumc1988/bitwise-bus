@@ -83,6 +83,16 @@ private:
 
 Analysis analyze(const Capture& capture, const AnalyzeOptions& options);
 
+// The same from frames that are already cut, whatever cut them: stage 3 is
+// not run, and the segmentation is taken as it is. It is how a stage after
+// segmentation is measured on its own, with the frames of a generator's truth,
+// and how frames that something else found (a delimiter, a length) can be
+// analysed. The model's framing is the idle gap if the segmentation says it
+// has one (idle_gap_ns is not 0), and unknown otherwise. A segmentation that
+// says it found nothing (`found` false) is not analysed.
+Analysis analyze_frames(const Capture& capture, const Segmentation& segmentation,
+                        const AnalyzeOptions& options);
+
 // What `bitwise analyze` prints: one line for each thing the stages found, then
 // the model as describe_model() prints it. Stable, so that tests can compare it.
 std::string describe_analysis(const Analysis& analysis);

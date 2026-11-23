@@ -253,7 +253,9 @@ against.
 
 ```console
 $ bitwise protocols
+mavlink1     MAVLink 1: HEARTBEAT, SYS_STATUS and ATTITUDE, 57600 baud 8N1, back to back, one event per byte
 modbus-rtu   Modbus RTU requests for functions 3 and 4, 9600 baud 8N1, one event per byte
+ubx          u-blox UBX: ACK-ACK, CFG-RATE and NAV-STATUS, 115200 baud 8N1, back to back, one event per byte
 $ bitwise synth modbus-rtu --seed 1 --frames 3 | head -5
 # bitwise-capture 1
 time_ns,channel,direction,id,data
@@ -289,6 +291,13 @@ find in them. The one cut that is not in the generator's own model is at byte
 its own, and nothing in the capture says it belongs with the byte after it.
 Random bytes at the same timing come out as one payload field and no checksum;
 without timing there is no framing and it says so.
+
+The two binary protocols of the first wave of the corpus, UBX and MAVLink 1,
+are there to be generated, and today `analyze` finds nothing in them: their
+frames follow one another with nothing between, so there is no gap to cut at,
+and their checksums (Fletcher-8, and a CRC with a seed that is not in the frame)
+are not ones it knows. That is the starting point of the next steps of the
+[roadmap](docs/roadmap.md), measured in its table of the baseline.
 
 ## What this does not do yet
 

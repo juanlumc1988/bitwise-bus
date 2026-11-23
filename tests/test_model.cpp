@@ -104,6 +104,103 @@ TEST_CASE("the framing is described, and only idle-gap framing has a gap") {
     CHECK(model.framing().idle_gap_ns == 5);
 }
 
+TEST_CASE("framing: contiguous, terminated and flagged are described, with their delimiter and escape") {
+    Model model;
+    bw::FramingInfo framing;
+    framing.kind = bw::FramingKind::Contiguous;
+    model.set_framing(framing);
+    CHECK(bw::describe_model(model) == "framing: contiguous, nothing between frames\n");
+
+    framing.kind      = bw::FramingKind::Terminated;
+    framing.delimiter = 0x0A;
+    model.set_framing(framing);
+    CHECK(bw::describe_model(model) == "framing: ends with 0xA\n");
+    CHECK(model.framing().delimiter == 0x0A);
+    framing.delimiter = 0;                               // a NUL is a delimiter like another
+    model.set_framing(framing);
+    CHECK(bw::describe_model(model) == "framing: ends with 0x0\n");
+
+    framing.kind      = bw::FramingKind::Flagged;
+    framing.delimiter = 0x7E;
+    model.set_framing(framing);
+    CHECK(bw::describe_model(model) == "framing: between 0x7E\n");
+
+    // HDLC: 0x7E is sent as 0x7D 0x5E, and 0x7D as 0x7D 0x5D.
+    framing.escaped        = true;
+    framing.escape         = 0x7D;
+    framing.delimiter_code = 0x5E;
+    framing.escape_code    = 0x5D;
+    model.set_framing(framing);
+    CHECK(bw::describe_model(model) == "framing: between 0x7E, escape 0x7D: 0x7E as 0x7D 0x5E, 0x7D as 0x7D 0x5D\n");
+    // SLIP: 0xC0 is sent as 0xDB 0xDC, and 0xDB as 0xDB 0xDD.
+    framing.delimiter      = 0xC0;
+    framing.escape         = 0xDB;
+    framing.delimiter_code = 0xDC;
+    framing.escape_code    = 0xDD;
+    model.set_framing(framing);
+    CHECK(bw::describe_model(model) == "framing: between 0xC0, escape 0xDB: 0xC0 as 0xDB 0xDC, 0xDB as 0xDB 0xDD\n");
+    CHECK(model.framing().escape_code == 0xDD);
+}
+
+TEST_CASE("framing: a delimiter or an escape where the kind has none, or one that cannot be told apart, is refused") {
+    Model model;
+    bw::FramingInfo good;
+    good.kind           = bw::FramingKind::Flagged;
+    good.delimiter      = 0x7E;
+    good.escaped        = true;
+    good.escape         = 0x7D;
+    good.delimiter_code = 0x5E;
+    good.escape_code    = 0x5D;
+    model.set_framing(good);
+
+    // Each of these leaves the framing as it was.
+    const bw::FramingKind others[4] = { bw::FramingKind::Unknown, bw::FramingKind::IdleGap,
+                                        bw::FramingKind::ByEvent, bw::FramingKind::Contiguous };
+    for (int k = 0; k < 4; ++k) {
+        bw::FramingInfo bad;
+        bad.kind      = others[k];
+        bad.delimiter = 1;                                   // a delimiter on a kind that has none
+        CHECK_THROWS_AS(model.set_framing(bad), std::invalid_argument);
+        bad.delimiter = 0;
+        bad.escaped   = true;                                // and an escape
+        bad.escape    = 1;
+        bad.delimiter_code = 2;
+        bad.escape_code    = 3;
+        CHECK_THROWS_AS(model.set_framing(bad), std::invalid_argument);
+    }
+    bw::FramingInfo terminated;
+    terminated.kind    = bw::FramingKind::Terminated;
+    terminated.escaped = true;                               // only flags are escaped
+    terminated.escape  = 1;
+    terminated.delimiter_code = 2;
+    terminated.escape_code    = 3;
+    CHECK_THROWS_AS(model.set_framing(terminated), std::invalid_argument);
+
+    bw::FramingInfo stray = good;                            // codes without `escaped`
+    stray.escaped = false;
+    CHECK_THROWS_AS(model.set_framing(stray), std::invalid_argument);
+    stray.escape = stray.delimiter_code = 0;                 // each of the three on its own
+    stray.escape_code = 5;
+    CHECK_THROWS_AS(model.set_framing(stray), std::invalid_argument);
+    stray.escape_code = 0;
+    stray.delimiter_code = 5;
+    CHECK_THROWS_AS(model.set_framing(stray), std::invalid_argument);
+    stray.delimiter_code = 0;
+    stray.escape = 5;
+    CHECK_THROWS_AS(model.set_framing(stray), std::invalid_argument);
+
+    bw::FramingInfo same = good;                             // the escape byte is the flag
+    same.escape = good.delimiter;
+    CHECK_THROWS_AS(model.set_framing(same), std::invalid_argument);
+    bw::FramingInfo codes = good;                            // two codes that are one
+    codes.escape_code = codes.delimiter_code;
+    CHECK_THROWS_AS(model.set_framing(codes), std::invalid_argument);
+
+    CHECK(model.framing().kind == bw::FramingKind::Flagged);    // unchanged through all of it
+    CHECK(model.framing().escape_code == 0x5D);
+    CHECK(model.framing().delimiter == 0x7E);
+}
+
 TEST_CASE("positions are fixed until something has no fixed size") {
     Model model;
     const std::size_t t = model.add_message_type("m");

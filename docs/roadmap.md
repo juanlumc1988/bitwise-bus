@@ -189,8 +189,8 @@ published test vectors before it enters the corpus.
 | NMEA 0183 | `$` … `*hh` CRLF, text | XOR, written as ASCII hex | text framing, variable-length comma-separated fields | 1 |
 | SLIP | `0xC0` delimiter, `0xDB` escape | none | byte stuffing | 1 |
 | HDLC / PPP async | `0x7E` flag, `0x7D` escape | CRC-16/X-25 | stuffing, then a CRC over the de-stuffed bytes | 1 |
-| MAVLink 1 and 2 | start byte and length | CRC-16 with a per-message extra seed | a hidden seed, sequence counter, length field, message-id discriminator | 1 |
-| u-blox UBX | two sync bytes and a length | Fletcher-8 | sync bytes, a non-CRC checksum | 1 |
+| MAVLink 1 and 2 | start byte and length | CRC-16 with a per-message extra seed | a hidden seed, sequence counter, length field, message-id discriminator | 1 (version 1 done) |
+| u-blox UBX | two sync bytes and a length | Fletcher-8 | sync bytes, a non-CRC checksum | 1 (done) |
 | Modbus ASCII | `:` … CRLF, hex text | LRC | text framing with hex-encoded fields | 2 |
 | Modbus TCP | MBAP header with a length | none | transaction counter, length field, no checksum | 2 |
 | LIN | break and sync byte | classic and enhanced sum | a protected ID with derived parity bits, short frames | 2 |
@@ -259,10 +259,58 @@ later, and several will lean on code written for Track A.
 - **Deepening** is one pull request per stage per wave of protocols, each with
   its corpus additions and the new metrics baseline. **Track B** is one pull
   request per feature, or a short series for the large ones.
+- **Wave 1** (NMEA 0183, SLIP, HDLC/PPP, MAVLink 1 and 2, UBX) goes in this
+  order, each step with its corpus and its change to the baseline below:
+  1. the model says contiguous, terminated and flagged framing, and UBX and
+     MAVLink 1 are generated, with an independent implementation and the
+     baseline (done: `bw/model.h`, `tests/mirror/mirror.py`);
+  2. MAVLink 2 (flags, a message id of three bytes, and a payload whose trailing
+     zeros are cut, so that frames of one message differ in length) and NMEA 0183
+     (text, and a checksum written as two hex characters, which the model
+     has to be able to say);
+  3. SLIP and HDLC/PPP (byte stuffing: the model describes the frame as it is
+     once the stuffing is taken out);
+  4. stage 3: frames cut by a sync pattern and a length, by terminators, and by
+     flags with stuffing, with a checksum that validates a cut as evidence for it;
+  5. stage 2: Fletcher-8, a CRC with a hidden seed byte, checksums written as
+     text, and a CRC over the bytes once stuffing is taken out;
+  6. stages 4 and 5: length fields, fields of varying size, text, and the
+     numbers of two bytes whose high byte never changes.
 - **Versions.** A minor version once the skeleton works, and one per completed
   wave afterwards. 1.0 when the API is stable and the stages meet thresholds
   across the corpus. The thresholds are set once the harness gives a baseline,
   not before.
+- **Where it ends.** The pipeline is finished when 1.0 is: the three waves, the
+  parametric generator (which matters more than any list of protocols), and the
+  thresholds. Track B is independent and optional, feature by feature. The
+  largest unknown is not in this list: no real capture has gone through the tool
+  yet, and a few should before wave 3, because a synthetic corpus can only flatter
+  what its author thought of.
+
+### Wave 1 baseline
+
+Stage 3 against the captures of UBX and MAVLink 1, and stages 2, 4 and 5 given
+the true frames (`analyze_frames`), on 200 frames of seed 3 and without timing
+noise. A boundary is a place where a field starts or ends; `exact` is a found
+field with the position and size of a true one, `kind` also its kind. Pinned by
+`tests/test_analyze.cpp`, which a pull request that improves a number changes.
+
+| Protocol, message | Frames found by gaps | Checksum | Fields, truth / found | Boundaries, truth / found / hit | Exact | Kind |
+|---|---|---|---|---|---|---|
+| UBX ACK-ACK | none | none | 8 / 10 | 9 / 11 / 9 | 6 | 5 |
+| UBX CFG-RATE | none | none | 9 / 13 | 10 / 14 / 10 | 5 | 4 |
+| UBX NAV-STATUS | none | none | 13 / 21 | 14 / 22 / 14 | 9 | 5 |
+| MAVLink 1 HEARTBEAT | none | none | 13 / 16 | 14 / 17 / 14 | 12 | 8 |
+| MAVLink 1 SYS_STATUS | none | none | 20 / 37 | 21 / 38 / 20 | 6 | 4 |
+| MAVLink 1 ATTITUDE | none | none | 14 / 23 | 15 / 24 / 15 | 7 | 4 |
+
+Nothing is found by gaps because there are none: the frames follow one another
+at the pace of the line. With the frames given, no checksum is found for lack
+of the algorithm, and the fields are cut too fine and typed with few of the
+kinds the truth has: a two-byte number with a high byte that never changes is two
+fields, an incrementing time is a counter, and the lengths, the sequence number
+and the floats come out as constants and payload. Every step of the list above
+moves a column of this table.
 
 ## Related projects (no shared code)
 

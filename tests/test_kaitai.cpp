@@ -251,6 +251,39 @@ TEST_CASE("kaitai: what the framing becomes") {
           "meta:\n  id: m\ndoc: \"Message type 'm'. Written by bitwise-bus. Each capture event is one frame.\"\nseq: []\n");
 }
 
+TEST_CASE("kaitai: the other framings are said in the doc") {
+    const struct {
+        bw::FramingKind kind;
+        bool            escaped;
+        const char*     sentence;
+    } cases[] = {
+        { bw::FramingKind::Contiguous, false, "Frames follow one another with nothing between them." },
+        { bw::FramingKind::Terminated, false, "A frame ends with the byte 0x0a." },
+        { bw::FramingKind::Flagged,    false, "A frame lies between two bytes 0x0a." },
+        { bw::FramingKind::Flagged,    true,  "A frame lies between two bytes 0x0a. Inside it 0x0a is sent as 0x7d 0x5e and 0x7d as 0x7d 0x5d." },
+    };
+    for (std::size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        CAPTURE(i);
+        Model m;
+        bw::FramingInfo framing;
+        framing.kind = cases[i].kind;
+        if (cases[i].kind != bw::FramingKind::Contiguous) {
+            framing.delimiter = 0x0A;
+        }
+        if (cases[i].escaped) {
+            framing.escaped        = true;
+            framing.escape         = 0x7D;
+            framing.delimiter_code = 0x5E;
+            framing.escape_code    = 0x5D;
+        }
+        m.set_framing(framing);
+        const std::size_t t = m.add_message_type("m");
+        CHECK(bw::export_kaitai(m, t, "m") ==
+              std::string("meta:\n  id: m\ndoc: \"Message type 'm'. Written by bitwise-bus. ") + cases[i].sentence +
+              "\"\nseq: []\n");
+    }
+}
+
 TEST_CASE("kaitai: the same model gives the same bytes, and the other message types are not written") {
     Model m = bw::protocol_model("modbus-rtu");
     const std::size_t other = m.add_message_type("other");
