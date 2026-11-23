@@ -7,6 +7,7 @@
 #include <stdexcept>
 
 #include "protocols/mavlink1.h"
+#include "protocols/mavlink2.h"
 #include "protocols/modbus_rtu.h"
 #include "protocols/nmea0183.h"
 #include "protocols/ubx.h"
@@ -22,6 +23,7 @@ bool by_name(const Protocol* a, const Protocol* b) {
 std::vector<const Protocol*> make_registry() {
     std::vector<const Protocol*> list;
     list.push_back(&mavlink1_protocol());
+    list.push_back(&mavlink2_protocol());
     list.push_back(&modbus_rtu_protocol());
     list.push_back(&nmea0183_protocol());
     list.push_back(&ubx_protocol());

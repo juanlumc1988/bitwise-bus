@@ -93,10 +93,14 @@ def fletcher8(data):
 
 
 def crc_extra(name, fields):
-    """CRC_EXTRA as the MAVLink generator defines it: the CRC of the message name and of
-    each field's type and name, in wire order, folded to a byte."""
-    text = name + " " + "".join("%s %s " % (t, n) for t, n in fields)
-    crc = mcrf4xx(text.encode("ascii"))
+    """CRC_EXTRA as the MAVLink generator defines it: the CRC of the message name and then, for each
+    field in wire order, its type, its name, and for an array its length as a byte, folded to a byte."""
+    text = (name + " ").encode("ascii")
+    for field in fields:
+        text += ("%s %s " % (field[0], field[1])).encode("ascii")
+        if len(field) > 2:
+            text += bytes([field[2]])
+    crc = mcrf4xx(text)
     return (crc & 0xFF) ^ (crc >> 8)
 
 
@@ -123,6 +127,12 @@ def nmea_checksum(body):
     return "%02X" % value
 
 
+MAVLINK2_EXTRA = {
+    "PROTOCOL_VERSION": ([("uint16_t", "version"), ("uint16_t", "min_version"), ("uint16_t", "max_version"),
+                          ("uint8_t", "spec_version_hash", 8), ("uint8_t", "library_version_hash", 8)], 22, 217),
+}
+
+
 def self_check():
     assert crc16_modbus(b"123456789") == 0x4B37                       # CRC-16/MODBUS
     assert mcrf4xx(b"123456789") == 0x6F91                             # CRC-16/MCRF4XX
@@ -136,6 +146,8 @@ def self_check():
     for name, (msg_id, fields, size, extra) in MAVLINK.items():
         sizes = {"uint32_t": 4, "float": 4, "uint16_t": 2, "int16_t": 2, "uint8_t": 1, "int8_t": 1}
         assert sum(sizes[t] for t, _ in fields) == size, name
+        assert crc_extra(name, fields) == extra, "CRC_EXTRA of %s is %d, not %d" % (name, crc_extra(name, fields), extra)
+    for name, (fields, size, extra) in MAVLINK2_EXTRA.items():       # one with arrays, whose lengths count
         assert crc_extra(name, fields) == extra, "CRC_EXTRA of %s is %d, not %d" % (name, crc_extra(name, fields), extra)
 
 
@@ -242,6 +254,64 @@ def mavlink1(seed, frames, jitter):
     return csv("uart", events)
 
 
+def mavlink2(seed, frames, jitter):
+    char_ns = 10 * 1_000_000_000 // 57600
+    max_delay = char_ns * jitter // 1000
+    rng = SplitMix64(seed)
+    boot0 = rng.below(100000)
+    hashes = rng.below(3)
+    spec_hash = [rng.below(256) for _ in range(8)]
+    library_hash = [rng.below(256) for _ in range(8)]
+    events, start = [], 0
+    for i in range(frames):
+        kind = rng.below(4)
+        if kind == 0:
+            name = "HEARTBEAT"
+            mode = [0, 3, 4, 5][rng.below(4)]
+            vehicle = 1 + rng.below(2)
+            base = [81, 209, 217][rng.below(3)]
+            status = 3 + rng.below(2)
+            payload = le(mode, 4) + [vehicle, 3, base, status, 3]
+        elif kind == 1:
+            name = "SYS_STATUS"
+            present = [0x1FFFF, 0x1FFFF, 0xFFFF][rng.below(3)]
+            enabled = present & [0xFFFF, 0x3FFF][rng.below(2)]
+            health = enabled & [0xFFFF, 0x7FFF][rng.below(2)]
+            payload = le(present, 4) + le(enabled, 4) + le(health, 4)
+            payload += le(rng.below(1000), 2) + le(10500 + rng.below(2100), 2) + le(rng.below(3000), 2)
+            payload += le(rng.below(50), 2) + le(0, 2) + le(0, 8)
+            unknown = rng.below(3) == 0
+            level = 1 + rng.below(100)
+            payload += [0 if unknown else level]
+        elif kind == 2:
+            name = "ATTITUDE"
+            payload = le((boot0 + 20 * i) % (1 << 32), 4)
+            for _ in range(3):
+                payload += le(float_bits(rng, 126, 3), 4)
+            for _ in range(2):
+                payload += le(float_bits(rng, 120, 4), 4)
+            yaw_speed = float_bits(rng, 120, 4)
+            zero = rng.below(4) == 0
+            payload += le(0 if zero else yaw_speed, 4)
+        else:
+            name = "PROTOCOL_VERSION"
+            version = [200, 200, 300][rng.below(3)]
+            highest = 200 + 100 * rng.below(2)
+            payload = le(version, 2) + le(100, 2) + le(highest, 2)
+            payload += spec_hash if hashes >= 1 else [0] * 8
+            payload += library_hash if hashes >= 2 else [0] * 8
+        while len(payload) > 1 and payload[-1] == 0:
+            payload.pop()
+        message_id = {"HEARTBEAT": 0, "SYS_STATUS": 1, "ATTITUDE": 30, "PROTOCOL_VERSION": 300}[name]
+        extra = ({k: v[3] for k, v in MAVLINK.items()}.get(name) if name in MAVLINK
+                 else MAVLINK2_EXTRA[name][2])
+        body = [len(payload), 0, 0, i & 0xFF, 1, 1] + le(message_id, 3) + payload
+        crc = mcrf4xx(bytes(body), extra)
+        frame = [0xFD] + body + le(crc, 2)
+        start = emit(rng, start, char_ns, max_delay, frame, events)
+    return csv("uart", events)
+
+
 def nmea0183(seed, frames, jitter):
     char_ns = 10 * 1_000_000_000 // 4800
     max_delay = char_ns * jitter // 1000
@@ -305,7 +375,7 @@ def tenths(value):
     return "%d.%d" % (value // 10, value % 10)
 
 
-GENERATORS = {"modbus-rtu": modbus_rtu, "ubx": ubx, "mavlink1": mavlink1, "nmea0183": nmea0183}
+GENERATORS = {"modbus-rtu": modbus_rtu, "ubx": ubx, "mavlink1": mavlink1, "mavlink2": mavlink2, "nmea0183": nmea0183}
 
 # The captures that tests/corpus holds: file name, protocol, seed, frames, jitter.
 CORPUS = [
@@ -316,6 +386,8 @@ CORPUS = [
     ("synth_ubx_seed3_40frames_jitter300.csv", "ubx", 3, 40, 300),
     ("synth_nmea0183_seed1_6frames.csv", "nmea0183", 1, 6, 0),
     ("synth_nmea0183_seed3_9frames_jitter300.csv", "nmea0183", 3, 9, 300),
+    ("synth_mavlink2_seed1_30frames.csv", "mavlink2", 1, 30, 0),
+    ("synth_mavlink2_seed3_40frames_jitter300.csv", "mavlink2", 3, 40, 300),
     ("synth_mavlink1_seed1_30frames.csv", "mavlink1", 1, 30, 0),
     ("synth_mavlink1_seed3_40frames_jitter300.csv", "mavlink1", 3, 40, 300),
 ]
