@@ -459,6 +459,17 @@ the reason the README gives for `rewind-mcu`.
   and that is what made this work without a facade. Not run on these headers:
   the sanitizers and any other platform.
 
+  **After the first step of stage 3** (segmentation by flags, which added two
+  functions and three fields to `segmentation.h`) the same command generated the
+  same 45 files without a change to the headers or the annotations. From Python,
+  over the shared library built from them, SLIP and PPP captures of 300 frames
+  were cut by flags (`segment_by_gaps` found nothing, `segment_by_flags` and
+  `segment_frames` found the 300 frames, the flag and its count), the model's
+  framing came out as `FramingKind.Flagged` with its byte, and
+  `describe_analysis` printed the same flags line as the CLI; a Modbus RTU
+  capture was still cut by gaps. 18 checks, all passing, with the same libstdc++
+  preload as before.
+
   Not tried: any platform other than Linux x86-64, threads, callbacks and
   directors, large captures, Python versions other than 3.13. To repeat the
   first step, from a directory holding `include/bw/`:
