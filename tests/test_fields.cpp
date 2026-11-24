@@ -426,6 +426,54 @@ TEST_CASE("discovery: bytes are not one field across the places where the checks
     CHECK(layout_of(random_frames(9, 32)).region_count() == 1);
 }
 
+TEST_CASE("discovery: a checksum written as text keeps its separator, which it does not cover, as a field") {
+    // A byte of header, six covered, a separator, two characters of checksum and two bytes after: all of
+    // them random, so that only the checksum says where the fields end.
+    ChecksumFinding f;
+    f.found         = true;
+    f.header_skip   = 1;
+    f.gap_bytes     = 1;
+    f.trailer_skip  = 2;
+    f.width_bits    = 16;
+    f.byte_order    = ByteOrder::Big;
+    f.ascii_hex     = true;
+    f.evidence_bits = 160;
+    const FieldMap m = layout_of(random_frames(12, 34), f);
+    REQUIRE(m.region_count() == 5);
+    CHECK(m.region(0).byte_offset == 0);
+    CHECK(m.region(0).byte_size == 1);
+    CHECK(m.region(1).byte_offset == 1);
+    CHECK(m.region(1).byte_size == 6);          // ends where the coverage does, not at the checksum
+    CHECK(m.region(2).byte_offset == 7);
+    CHECK(m.region(2).byte_size == 1);          // the separator
+    CHECK(m.region(2).kind == FieldKind::Unknown);
+    CHECK_FALSE(m.region(2).ascii_hex);
+    CHECK(m.region(3).byte_offset == 8);
+    CHECK(m.region(3).byte_size == 2);
+    CHECK(m.region(3).kind == FieldKind::Checksum);
+    CHECK(m.region(3).ascii_hex);
+    CHECK(m.region(3).byte_order == ByteOrder::Big);
+    CHECK(m.region(4).byte_offset == 10);
+    CHECK(m.region(4).byte_size == 2);
+    // One that is written as bytes has no text in it.
+    CHECK_FALSE(layout_of(random_frames(9, 32), crc16_at(2, 1)).region(2).ascii_hex);
+}
+
+TEST_CASE("discovery: the separator counts towards a checksum fitting the frames") {
+    const std::vector<Bytes> frames = random_frames(8, 35);
+    const Capture            c      = fixtures::capture_of(frames);
+    const Segmentation       s      = cut(c);
+    const FieldOptions       o;
+    ChecksumFinding          f = crc16_at(3, 2);          // 3 + 2 + 2 of 8: one byte to cover
+    f.gap_bytes = 0;
+    CHECK_NOTHROW(bw::discover_fields(c, s, f, 8, o));
+    f.gap_bytes = 1;                                      // and no byte left to cover
+    CHECK_THROWS_AS(bw::discover_fields(c, s, f, 8, o), std::invalid_argument);
+    f = crc16_at(2, 2);
+    f.gap_bytes = 1;
+    CHECK_NOTHROW(bw::discover_fields(c, s, f, 8, o));
+}
+
 TEST_CASE("discovery: a checksum that cannot be in frames of this size is a mistake of the caller") {
     const std::vector<Bytes> frames = random_frames(8, 33);
     const Capture            c      = fixtures::capture_of(frames);

@@ -186,11 +186,11 @@ published test vectors before it enters the corpus.
 | Protocol | Framing | Checksum | What it stresses | Wave |
 |---|---|---|---|---|
 | Modbus RTU | idle gap | CRC-16/MODBUS, little-endian | timing segmentation, function-code discriminator, request/response lengths | skeleton |
-| NMEA 0183 | `$` … `*hh` CRLF, text | XOR, written as ASCII hex | text framing, variable-length comma-separated fields | 1 (done) |
+| NMEA 0183 | `$` … `*hh` CRLF, text | XOR-8, written as ASCII hex | text framing, variable-length comma-separated fields | 1 (done) |
 | SLIP | `0xC0` delimiter, `0xDB` escape | none | byte stuffing | 1 (done) |
 | HDLC / PPP async | `0x7E` flag, `0x7D` escape | CRC-16/X-25 | stuffing, then a CRC over the de-stuffed bytes | 1 (done) |
 | MAVLink 1 and 2 | start byte and length | CRC-16 with a per-message extra seed | a hidden seed, sequence counter, length field, message-id discriminator; in 2, payloads cut of their trailing zeros | 1 (done) |
-| u-blox UBX | two sync bytes and a length | Fletcher-8 | sync bytes, a non-CRC checksum | 1 (done) |
+| u-blox UBX | two sync bytes and a length | Fletcher-8 (FLETCHER-8) | sync bytes, a non-CRC checksum | 1 (done) |
 | Modbus ASCII | `:` … CRLF, hex text | LRC | text framing with hex-encoded fields | 2 |
 | Modbus TCP | MBAP header with a length | none | transaction counter, length field, no checksum | 2 |
 | LIN | break and sync byte | classic and enhanced sum | a protected ID with derived parity bits, short frames | 2 |
@@ -300,11 +300,18 @@ later, and several will lean on code written for Track A.
   5. stage 2, in steps. (a) Done: the later stages read the frames as the protocol
      sends them (`frame_contents` in `bw/segmentation.h`: flags off, stuffing
      undone), and the catalogue has CRC-16/IBM-SDLC (X-25), the FCS of HDLC, PPP and
-     X.25, so that the FCS of PPP is found in every kind of frame. The rest, in the
-     order it is likely to go in: Fletcher-8 and the simple checksums, written as
-     text too (UBX, and the `*hh` of NMEA); more CRCs of the catalogue; and a CRC
-     with a hidden seed byte (MAVLink's CRC_EXTRA), which needs the frames grouped
-     by message id and so belongs partly to stage 4;
+     X.25, so that the FCS of PPP is found in every kind of frame. (b) Done: the sums
+     that are not CRCs (`bw/sums.h`: XOR-8, SUM-8, SUM-8/NEGATED, FLETCHER-8,
+     FLETCHER-16), searched with the CRCs, as bytes (a byte, or two in either
+     order) and, those of a byte, as two hexadecimal characters with or without a
+     byte of separator between what they cover and them: Fletcher-8 of UBX, and the
+     `*hh` of NMEA. A sum that is the first byte of a wider one over the same bytes
+     (Fletcher's first sum is the plain sum) is a part of it and not a second
+     answer. The rest, in the order it is likely to go in: more CRCs of the
+     catalogue; and a CRC with a hidden seed byte (MAVLink's CRC_EXTRA), which needs
+     the frames grouped by message id and so belongs partly to stage 4. Modbus
+     ASCII's LRC is over the bytes that its hexadecimal text stands for, which is
+     wave 2;
   6. stages 4 and 5: length fields, fields of varying size, text, and the
      numbers of two bytes whose high byte never changes.
 - **Versions.** A minor version once the skeleton works, and one per completed
@@ -328,12 +335,21 @@ field with the position and size of a true one, `kind` also its kind. Pinned by
 
 | Protocol, message | Frames found by gaps | By sync byte and length | Checksum | Fields, truth / found | Boundaries, truth / found / hit | Exact | Kind |
 |---|---|---|---|---|---|---|---|
-| UBX ACK-ACK | none | exact | none | 8 / 10 | 9 / 11 / 9 | 6 | 5 |
-| UBX CFG-RATE | none | exact | none | 9 / 13 | 10 / 14 / 10 | 5 | 4 |
-| UBX NAV-STATUS | none | exact | none | 13 / 21 | 14 / 22 / 14 | 9 | 5 |
+| UBX ACK-ACK | none | exact | 2 candidates | 8 / 10 | 9 / 11 / 9 | 6 | 5 |
+| UBX CFG-RATE | none | exact | Fletcher-8 | 9 / 13 | 10 / 14 / 10 | 5 | 5 |
+| UBX NAV-STATUS | none | exact | Fletcher-8 | 13 / 21 | 14 / 22 / 14 | 9 | 6 |
 | MAVLink 1 HEARTBEAT | none | exact | none | 13 / 16 | 14 / 17 / 14 | 12 | 8 |
 | MAVLink 1 SYS_STATUS | none | exact | none | 20 / 37 | 21 / 38 / 20 | 6 | 4 |
 | MAVLink 1 ATTITUDE | none | exact | none | 14 / 23 | 15 / 24 / 15 | 7 | 4 |
+
+The checksum column is stage 2, searching the CRCs of the catalogue and the sums
+that are not CRCs (`bw/sums.h`). UBX's Fletcher-8 is found in two of its three
+messages, in the same position, width, order, coverage and algorithm as the truth,
+and in the same two kinds of the 30 frames of the corpus. ACK-ACK has 3 different
+frames among its 60, and the same bytes are explained by Fletcher-8 and by
+Fletcher-16, which differ only when a sum reaches 255: with 48 bits of evidence
+and two candidates it says it cannot tell, and that is the right answer. MAVLink's
+CRC has a seed that nothing in the frame holds, so it is none.
 
 The first of the two frame columns is stage 3 by gaps, which finds nothing in a
 capture whose frames follow one another with nothing between them; the second is
@@ -358,9 +374,14 @@ pipeline cuts text into, every sentence is found and only them: 200 of 200 on
 seeds 1 to 4, and the pipeline takes the lines over the gaps because they cut at
 every place the gaps do and in more. With the true sentences given, or the ones
 found, the stages group them by size, and the sentences of two kinds share
-sizes: they make seven message types where there are three, none with a checksum
-(it is an exclusive or, written as text). Scoring the fields of a sentence needs
-the harness to place fields that have no fixed place, which is part of stage 4.
+sizes: they make seven message types where there are three, and the exclusive or
+is found in every one of the seven, written as two hexadecimal characters after
+the star, with the dollar not covered (header skip 1), the star not covered
+either (a gap of one byte) and the line end after (trailer skip 2): the evidence
+is 8 bits for each different sentence, since the two characters hold a byte. Scoring the
+fields of a sentence needs the harness to place fields that have no fixed place,
+which is part of stage 4, so the checksum does not yet count as matching the
+truth.
 
 SLIP and PPP in HDLC-like framing are the first protocols with byte stuffing. On 300
 frames of seed 3 the line has a byte every character time throughout, so no gap is found,
@@ -537,6 +558,20 @@ the reason the README gives for `rewind-mcu`.
   protocols have once unstuffed (19 and 10; 14, 16 and 30), `analyze` finding their
   types, the FCS of PPP in each of the three (`CRC-16/IBM-SDLC`, 16 bits, from the
   address to the end), and the frames of UBX as they are.
+
+  **After the simple checksums** (`ChecksumFinding` gets `ascii_hex` and
+  `gap_bytes`, and `FieldRegion` gets `ascii_hex`) it was the same once more: the
+  same 45 files, no change to the annotations, and the two new fields in the
+  dataclasses. From Python, 19 checks pass: the exclusive or of NMEA in each of
+  its seven types (`XOR-8`, as text, 16 bits on the line and 8 of evidence each,
+  after the dollar and the star and before the line end), the checksum of the
+  model as text covering from the first character after the dollar, the
+  `describe_analysis` line, the export of that checksum as two characters, the
+  Fletcher-8 of UBX in the two types that have it (header skip 2, little-endian)
+  and the third type with two candidates, the names of the algorithms past the
+  catalogue (the five sums, and an error after them), and Modbus RTU, PPP and
+  MAVLink 1 as before. `bw/sums.h` is not bound: nothing in it is needed from a
+  binding that `checksum_algorithm_name` does not say.
 
   Not tried: any platform other than Linux x86-64, threads, callbacks and
   directors, large captures, Python versions other than 3.13. To repeat the

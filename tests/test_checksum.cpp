@@ -9,6 +9,7 @@
 
 #include "doctest.h"
 
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -17,6 +18,7 @@
 #include "bw/checksum.h"
 #include "bw/protocol.h"
 #include "bw/segmentation.h"
+#include "bw/sums.h"
 #include "frame_fixtures.h"
 
 using bw::ByteOrder;
@@ -192,12 +194,16 @@ TEST_CASE("checksum stage: the Modbus RTU generator's frames give its checksum")
     CHECK(bw::checksum_algorithm_name(f.algorithm) == "CRC-16/MODBUS");
 }
 
-TEST_CASE("checksum stage: algorithm names come from the catalogue, and an index outside it throws") {
+TEST_CASE("checksum stage: algorithm names are the catalogue's and then the sums', and an index outside throws") {
     for (std::size_t i = 0; i < bw::catalog_size(); ++i) {
         CHECK(bw::checksum_algorithm_name(static_cast<std::uint32_t>(i)) == bw::catalog()[i].name);
     }
-    CHECK_THROWS_AS(bw::checksum_algorithm_name(static_cast<std::uint32_t>(bw::catalog_size())),
+    for (std::size_t i = 0; i < bw::sum_count(); ++i) {
+        CHECK(bw::checksum_algorithm_name(static_cast<std::uint32_t>(bw::catalog_size() + i)) == bw::sums()[i].name);
+    }
+    CHECK_THROWS_AS(bw::checksum_algorithm_name(static_cast<std::uint32_t>(bw::catalog_size() + bw::sum_count())),
                     std::out_of_range);
+    CHECK_THROWS_AS(bw::checksum_algorithm_name(std::numeric_limits<std::uint32_t>::max()), std::out_of_range);
 }
 
 TEST_CASE("checksum stage: an 8-bit checksum has no byte order") {

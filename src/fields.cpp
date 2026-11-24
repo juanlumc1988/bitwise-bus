@@ -172,14 +172,16 @@ FieldMap discover_fields(const Capture& capture, const Segmentation& segmentatio
     const std::uint32_t size           = size_bytes;
     const std::uint32_t checksum_bytes = checksum.width_bits / 8;
     std::uint32_t       checksum_start = 0;
+    std::uint32_t       covered_end    = 0;     // where what it covers ends: before the gap, if any
     if (checksum.found) {
         // The covered range is not empty, or the search would not have said so.
         if (checksum.width_bits == 0 || checksum.width_bits % 8 != 0 ||
             static_cast<std::uint64_t>(checksum.header_skip) + checksum.trailer_skip +
-                checksum_bytes >= size) {
+                checksum.gap_bytes + checksum_bytes >= size) {
             throw std::invalid_argument("the checksum does not fit frames of this size");
         }
         checksum_start = size - checksum.trailer_skip - checksum_bytes;
+        covered_end    = checksum_start - checksum.gap_bytes;
     }
 
     const std::vector<FrameSpan> spans = frames_of_size(capture, segmentation, size);
@@ -206,6 +208,7 @@ FieldMap discover_fields(const Capture& capture, const Segmentation& segmentatio
             FieldRegion region = region_of(k, checksum_bytes, FieldStructure::Checksum);
             region.kind          = FieldKind::Checksum;
             region.byte_order    = checksum.byte_order;
+            region.ascii_hex     = checksum.ascii_hex;
             region.evidence_bits = checksum.evidence_bits;
             map.add_region(region);
             k += checksum_bytes;
@@ -214,9 +217,11 @@ FieldMap discover_fields(const Capture& capture, const Segmentation& segmentatio
         std::uint32_t end = k + 1;
         if (structure[k] == FieldStructure::Many) {
             // A run of bytes with nothing to tell them apart is one field, but
-            // not across a place where the checksum's coverage begins or ends.
+            // not across a place where the checksum's coverage begins or ends,
+            // or where the checksum itself does.
             while (end < size && structure[end] == FieldStructure::Many &&
-                   !(checksum.found && (end == checksum.header_skip || end == checksum_start))) {
+                   !(checksum.found && (end == checksum.header_skip || end == covered_end ||
+                                        end == checksum_start))) {
                 ++end;
             }
         }

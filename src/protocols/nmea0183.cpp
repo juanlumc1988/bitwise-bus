@@ -191,7 +191,7 @@ public:
             checksum.ascii_hex    = true;
             checksum.covers_first = 1;                       // from the address
             checksum.covers_last  = static_cast<std::uint32_t>(last);
-            model.add_field(t, "checksum", checksum, "XOR of the characters between $ and *");
+            model.add_field(t, "checksum", checksum, "XOR-8");
             model.add_field(t, "end", constant_text("\r\n"), "");
         }
         return model;

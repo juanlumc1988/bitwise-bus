@@ -57,6 +57,7 @@ struct FieldRegion {
     // kind stays Unknown until then.
     FieldKind      kind          = FieldKind::Unknown;
     ByteOrder      byte_order    = ByteOrder::NotApplicable;
+    bool           ascii_hex     = false; // Checksum: written as text, two hexadecimal characters
     std::uint64_t  constant      = 0;     // Constant
     std::uint64_t  step          = 0;     // Counter: how much it goes up from one frame to the next
     std::uint32_t  evidence_bits = 0;     // bits of evidence behind the kind; 0 for Payload

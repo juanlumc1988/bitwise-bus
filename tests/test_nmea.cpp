@@ -345,15 +345,44 @@ TEST_CASE("nmea0183 baseline: gaps find the seconds, not the sentences") {
     CHECK(s.found_boundaries == 31);
     CHECK(s.boundary_hits == 31);
 
-    // Given the true sentences: no checksum, since the exclusive or is not in the catalogue and is written as
-    // text, and seven message types where there are three.
+    // Given the true sentences: seven message types where there are three, and in each of them the exclusive
+    // or, written as two hexadecimal characters after the star, which is not covered, with the dollar left out
+    // and the carriage return and line feed after.
     bw::SegmentationInfo info;
     info.found = true;
     const bw::Analysis a = bw::analyze_frames(d.capture(), bw::Segmentation(info, d.frames()), bw::AnalyzeOptions());
     CHECK(a.type_count() == 7);
     for (std::size_t t = 0; t < a.type_count(); ++t) {
-        CHECK_FALSE(a.type_report(t).checksum.found);
+        const bw::ChecksumFinding& c = a.type_report(t).checksum;
+        CAPTURE(t);
+        REQUIRE(c.found);
+        CHECK(bw::checksum_algorithm_name(c.algorithm) == "XOR-8");
+        CHECK(c.ascii_hex);
+        CHECK(c.width_bits == 16);
+        CHECK(c.byte_order == bw::ByteOrder::Big);
+        CHECK(c.header_skip == 1);
+        CHECK(c.gap_bytes == 1);
+        CHECK(c.trailer_skip == 2);
+        CHECK(c.evidence_bits == 8 * c.distinct_frames);
+
+        // In the model: the star is a field of its own that the checksum does not cover, and the
+        // checksum is text, and covers from the first character after the dollar.
+        const bw::Model& m = a.model();
+        REQUIRE(t < m.message_type_count());
+        const std::size_t count = m.field_count(t);
+        REQUIRE(count >= 6);
+        const std::size_t checksum = count - 3;                      // then CR and LF
+        const bw::FieldInfo info = m.field(t, checksum);
+        CHECK(info.kind == bw::FieldKind::Checksum);
+        CHECK(info.ascii_hex);
+        CHECK(info.bit_size == 16);
+        CHECK(info.covers_first == 1);
+        CHECK(info.covers_last == checksum - 2);
+        CHECK(m.field_detail(t, checksum) == "XOR-8");
+        CHECK(m.field(t, checksum - 1).kind == bw::FieldKind::Constant);
+        CHECK(m.field(t, checksum - 1).constant == '*');
     }
+    CHECK(bw::describe_analysis(a).find("checksum XOR-8, written as two hexadecimal characters, evidence ") != std::string::npos);
 }
 
 TEST_CASE("nmea0183: a negative separation has its sign, small numbers their zeros, and the day turns over") {

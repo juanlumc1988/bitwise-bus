@@ -126,7 +126,7 @@ public:
             FieldInfo checksum = field(FieldKind::Checksum, 16, ByteOrder::Little);
             checksum.covers_first = 2;                                          // from the class
             checksum.covers_last  = static_cast<std::uint32_t>(last);
-            model.add_field(t, "checksum", checksum, "Fletcher-8 (UBX)");
+            model.add_field(t, "checksum", checksum, "FLETCHER-8");
         }
         return model;
     }

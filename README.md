@@ -303,13 +303,15 @@ each other at the pace of the line, but a flag byte bounds each frame, and `anal
 them there, reads them without the flags and with the stuffing undone, and finds the FCS of
 PPP. UBX and MAVLink follow one another with nothing between them and have no flag, but each
 frame starts with a sync byte and says how long it is, and `analyze` cuts them there. What it
-makes of them next is limited by what the later stages do not know yet: the checksums
-(Fletcher-8, and a CRC with a seed that is not in the frame), and the frames of MAVLink 2
+makes of them next is limited by what the later stages do not know yet: the checksum of
+MAVLink (a CRC with a seed that is not in the frame), and the frames of MAVLink 2
 that differ in length for the same message because the zeros at the end of a payload are not
-sent. NMEA
+sent. The Fletcher-8 of UBX is found, and so are the sums of one byte, also when they are written as two
+hexadecimal characters. NMEA
 sentences are text, and come three at a time with a second of silence after them: the gaps
 find the seconds, and `analyze` cuts them into lines, which are the sentences; they differ in
-length, and the exclusive-or checksum is written as two hexadecimal characters. That is the
+length, and the exclusive-or checksum, written as two hexadecimal characters after the star,
+is found in each kind. That is the
 starting point of the next steps of the [roadmap](docs/roadmap.md), measured in its table of
 the baseline.
 

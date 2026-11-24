@@ -45,6 +45,7 @@ endfunction()
 add_library(bw_core STATIC
     src/crc.cpp
     src/catalog.cpp
+    src/sums.cpp
     src/crc_search.cpp
     src/capture.cpp
     src/model.cpp
@@ -150,7 +151,8 @@ if(BW_BUILD_TESTS)
         tests/test_flags.cpp
         tests/test_sync.cpp
         tests/test_lines.cpp
-        tests/test_unstuff.cpp)
+        tests/test_unstuff.cpp
+        tests/test_sums.cpp)
     target_include_directories(bw_tests PRIVATE tests/third_party)
     target_compile_definitions(bw_tests PRIVATE
         "BW_CORPUS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus\""
@@ -196,10 +198,10 @@ if(BW_BUILD_TESTS)
         "time_ns,channel.*0,uart,,,24.*2083333,uart,,,47.*4166666,uart,,,50")
     add_test(NAME cli_protocols_nmea0183 COMMAND bitwise protocols nmea0183)
     set_tests_properties(cli_protocols_nmea0183 PROPERTIES PASS_REGULAR_EXPRESSION
-        "framing: ends with 0xA.*\"address\" +constant +48 bits @8 big-endian = 0x47504747412C.*\"checksum\" +checksum +16 bits @[?] big-endian as hex text covers 1..15 XOR of the characters between [$] and [*]")
+        "framing: ends with 0xA.*\"address\" +constant +48 bits @8 big-endian = 0x47504747412C.*\"checksum\" +checksum +16 bits @[?] big-endian as hex text covers 1..15 XOR-8")
     add_test(NAME cli_protocols_ubx COMMAND bitwise protocols ubx)
     set_tests_properties(cli_protocols_ubx PROPERTIES PASS_REGULAR_EXPRESSION
-        "framing: contiguous, nothing between frames.*message type 0 \"ack_ack\".*message type 2 \"nav_status\".*\"checksum\" +checksum +16 bits @[0-9]+ little-endian covers 2..11 Fletcher-8 \\(UBX\\)")
+        "framing: contiguous, nothing between frames.*message type 0 \"ack_ack\".*message type 2 \"nav_status\".*\"checksum\" +checksum +16 bits @[0-9]+ little-endian covers 2..11 FLETCHER-8")
     add_test(NAME cli_protocols_mavlink1 COMMAND bitwise protocols mavlink1)
     set_tests_properties(cli_protocols_mavlink1 PROPERTIES PASS_REGULAR_EXPRESSION
         "message type 1 \"sys_status\".*\"crc\" +checksum.*CRC-16/MCRF4XX seeded with CRC_EXTRA 124")
@@ -245,7 +247,7 @@ if(BW_BUILD_TESTS)
     add_test(NAME cli_analyze_ubx
         COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_ubx_seed1_30frames.csv)
     set_tests_properties(cli_analyze_ubx PROPERTIES PASS_REGULAR_EXPRESSION
-        "framing +sync byte 0xB5, frame size = the 1-byte length at offset 4 plus 8 \\(0 breaks in the chain\\).*frames +30.*type0 +14 bytes, 12 frames.*framing: contiguous, nothing between frames")
+        "framing +sync byte 0xB5, frame size = the 1-byte length at offset 4 plus 8 \\(0 breaks in the chain\\).*frames +30.*type0 +14 bytes, 12 frames; checksum FLETCHER-8, 16 bits little-endian, evidence 144 bits.*type1 +24 bytes, 12 frames; checksum FLETCHER-8, 16 bits little-endian, evidence 192 bits.*type2 +10 bytes, 6 frames; no checksum found: 2 candidates that cannot be told apart.*framing: contiguous, nothing between frames")
     add_test(NAME cli_analyze_mavlink1
         COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_mavlink1_seed1_30frames.csv)
     set_tests_properties(cli_analyze_mavlink1 PROPERTIES PASS_REGULAR_EXPRESSION

@@ -177,7 +177,7 @@ TEST_CASE("ubx: its model is the documented one") {
         CHECK(ck.kind == FieldKind::Checksum);
         CHECK(ck.covers_first == 2);                                 // from the class
         CHECK(ck.covers_last == m.field_count(t) - 2);               // to the end of the payload
-        CHECK(m.field_detail(t, m.field_count(t) - 1) == "Fletcher-8 (UBX)");
+        CHECK(m.field_detail(t, m.field_count(t) - 1) == "FLETCHER-8");
         // The payload fields add up to the length the frame carries.
         std::uint64_t payload_bits = 0;
         for (std::size_t f = 5; f + 1 < m.field_count(t); ++f) {
