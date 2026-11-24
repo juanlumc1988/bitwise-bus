@@ -29,6 +29,7 @@ FieldInfo info_of(const FieldRegion& region) {
     info.size_kind     = SizeKind::Fixed;
     info.bit_size      = 8 * region.byte_size;
     info.byte_order    = region.byte_order;
+    info.ascii_hex     = region.ascii_hex;
     info.evidence_bits = region.evidence_bits;
     if (region.kind == FieldKind::Constant) {
         info.constant = region.constant;
@@ -45,17 +46,23 @@ void add_fields(Model* model, std::size_t type, const FieldMap& fields,
         std::string       name   = "field_" + number(region.byte_offset);
         std::string       detail;
         if (region.kind == FieldKind::Checksum) {
-            // The bytes before it end where it starts, and the first of the
-            // fields it covers starts where the search said coverage begins.
-            std::uint32_t first = 0;
+            // The first of the fields it covers starts where the search said
+            // coverage begins, and the last ends where it says it ends: at the
+            // checksum, or before the separator that comes between them.
+            const std::uint32_t covered_end = region.byte_offset - checksum.gap_bytes;
+            std::uint32_t       first       = 0;
+            std::uint32_t       last        = static_cast<std::uint32_t>(i - 1);
             for (std::size_t j = 0; j < i; ++j) {
-                if (fields.region(j).byte_offset == checksum.header_skip) {
+                const FieldRegion other = fields.region(j);
+                if (other.byte_offset == checksum.header_skip) {
                     first = static_cast<std::uint32_t>(j);
-                    break;
+                }
+                if (other.byte_offset + other.byte_size == covered_end) {
+                    last = static_cast<std::uint32_t>(j);
                 }
             }
             info.covers_first = first;
-            info.covers_last  = static_cast<std::uint32_t>(i - 1);
+            info.covers_last  = last;
             name              = "checksum";
             detail            = checksum_algorithm_name(checksum.algorithm);
         } else if (region.kind == FieldKind::Counter) {
@@ -75,9 +82,12 @@ std::string hex_byte(unsigned value) {
 
 std::string checksum_line(const ChecksumFinding& c) {
     if (c.found) {
-        return "checksum " + checksum_algorithm_name(c.algorithm) + ", " + number(c.width_bits) +
-               " bits" + (c.byte_order == ByteOrder::Big ? " big-endian"
-                          : c.byte_order == ByteOrder::Little ? " little-endian" : "") +
+        const std::string form =
+            c.ascii_hex ? "written as two hexadecimal characters"
+                        : number(c.width_bits) + " bits" +
+                              (c.byte_order == ByteOrder::Big ? " big-endian"
+                               : c.byte_order == ByteOrder::Little ? " little-endian" : "");
+        return "checksum " + checksum_algorithm_name(c.algorithm) + ", " + form +
                ", evidence " + number(c.evidence_bits) + " bits";
     }
     if (c.candidates == 0) {

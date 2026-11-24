@@ -468,23 +468,28 @@ TEST_CASE("analyze_frames: the frames are taken as they are, and nothing is look
 
 TEST_CASE("wave 1 baseline: with the true frames, what the stages find in UBX and MAVLink 1") {
     // Where wave 1 starts: stage 3 finds no frames in these (the test of the protocols checks that),
-    // and given the true ones, stage 2 finds no checksum, since Fletcher-8 and a CRC with a hidden
-    // seed byte are not in the catalogue; stage 4 finds every boundary there is, and some more,
-    // because a number of two bytes with a high byte that never changes is two fields to it; and
-    // stage 5 types what it can see. The numbers are those of 200 frames of seed 3, and each step of
-    // wave 1 that improves one of them changes this table in the same pull request.
+    // and given the true ones, stage 2 finds Fletcher-8 in two of the three types of UBX, and no
+    // checksum in MAVLink, which is a CRC with a hidden seed byte that the catalogue does not have;
+    // the third type of UBX, the acknowledgement, has three different frames in 60, which Fletcher-8
+    // and Fletcher-16 (the same sums, modulo 255) explain alike, so there it says it cannot tell.
+    // Stage 4 finds every boundary there is, and some more, because a number of two bytes with a high
+    // byte that never changes is two fields to it; and stage 5 types what it can see. The numbers are
+    // those of 200 frames of seed 3, and each step of wave 1 that improves one of them changes this
+    // table in the same pull request.
     struct Row {
         const char*   protocol;
         const char*   type;
         unsigned      truth_fields, found_fields, truth_boundaries, found_boundaries, hits, exact, kinds;
+        unsigned      candidates;   // that stage 2 could not tell apart, or the one that it found
+        bool          checksum;     // found
     };
     const Row rows[] = {
-        { "ubx",      "ack_ack",    8,  10, 9,  11, 9,  6,  5 },
-        { "ubx",      "cfg_rate",   9,  13, 10, 14, 10, 5,  4 },
-        { "ubx",      "nav_status", 13, 21, 14, 22, 14, 9,  5 },
-        { "mavlink1", "heartbeat",  13, 16, 14, 17, 14, 12, 8 },
-        { "mavlink1", "sys_status", 20, 37, 21, 38, 20, 6,  4 },
-        { "mavlink1", "attitude",   14, 23, 15, 24, 15, 7,  4 },
+        { "ubx",      "ack_ack",    8,  10, 9,  11, 9,  6,  5, 2, false },
+        { "ubx",      "cfg_rate",   9,  13, 10, 14, 10, 5,  5, 1, true },
+        { "ubx",      "nav_status", 13, 21, 14, 22, 14, 9,  6, 1, true },
+        { "mavlink1", "heartbeat",  13, 16, 14, 17, 14, 12, 8, 0, false },
+        { "mavlink1", "sys_status", 20, 37, 21, 38, 20, 6,  4, 0, false },
+        { "mavlink1", "attitude",   14, 23, 15, 24, 15, 7,  4, 0, false },
     };
     const char* protocols[2] = { "ubx", "mavlink1" };
     std::size_t checked = 0;
@@ -502,8 +507,6 @@ TEST_CASE("wave 1 baseline: with the true frames, what the stages find in UBX an
             const std::string type = d.model().message_type_name(tt);
             CAPTURE(protocols[p]);
             CAPTURE(type);
-            CHECK_FALSE(a.type_report(ft).checksum.found);
-            CHECK(a.type_report(ft).checksum.candidates == 0);
             const bw::FieldScore s = bw::score_fields(d.model(), tt, a.model(), ft);
             for (std::size_t r = 0; r < sizeof(rows) / sizeof(rows[0]); ++r) {
                 if (std::string(rows[r].protocol) == protocols[p] && type == rows[r].type) {
@@ -515,8 +518,10 @@ TEST_CASE("wave 1 baseline: with the true frames, what the stages find in UBX an
                     CHECK(s.boundary_hits == rows[r].hits);
                     CHECK(s.exact_fields == rows[r].exact);
                     CHECK(s.kind_hits == rows[r].kinds);
-                    CHECK_FALSE(s.found_has_checksum);
-                    CHECK_FALSE(s.checksum_match);
+                    CHECK(a.type_report(ft).checksum.found == rows[r].checksum);
+                    CHECK(a.type_report(ft).checksum.candidates == rows[r].candidates);
+                    CHECK(s.found_has_checksum == rows[r].checksum);
+                    CHECK(s.checksum_match == rows[r].checksum);
                 }
             }
         }
