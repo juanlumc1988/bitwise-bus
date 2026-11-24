@@ -31,18 +31,20 @@ int usage() {
         "bitwise -- infer undocumented bus protocols from captures\n"
         "\n"
         "usage:\n"
+        "  bitwise --version\n"
         "  bitwise crc-catalog\n"
-        "  bitwise crc-find FILE [FILE...] [--header-skip N] [--trailer-skip N] [--hidden-byte]\n"
-        "  bitwise capture-info FILE\n"
+        "  bitwise crc-find FRAME [FRAME...] [--header-skip N] [--trailer-skip N] [--hidden-byte]\n"
+        "  bitwise capture-info CAPTURE\n"
         "  bitwise protocols [NAME]\n"
         "  bitwise synth NAME [--seed N] [--frames N] [--jitter-permille N]\n"
         "                     [--corrupt-permille N] [--lose-permille N]\n"
-        "  bitwise analyze FILE [--min-gap-ratio N] [--min-frames N]\n"
-        "  bitwise export FILE [--format kaitai] [--type N] [--id NAME] [--min-gap-ratio N] [--min-frames N]\n"
+        "  bitwise analyze CAPTURE [--min-gap-ratio N] [--min-frames N]\n"
+        "  bitwise export CAPTURE [--format kaitai] [--type N] [--id NAME] [--min-gap-ratio N] [--min-frames N]\n"
         "\n"
-        "Each FILE is one captured frame, raw bytes. Give it as many frames\n"
-        "as you have: a single narrow checksum proves nothing, and the tool\n"
-        "will say so rather than pick a winner.\n");
+        "A CAPTURE is a capture file (docs/capture-format.md); `synth` writes one, from a protocol\n"
+        "of `protocols`, or `random` or `random-text`, made up from the seed. A FRAME is one\n"
+        "captured frame, raw bytes: give `crc-find` as many as you have, since a single narrow\n"
+        "checksum proves nothing, and the tool will say so rather than pick a winner.\n");
     return 2;
 }
 
@@ -522,6 +524,10 @@ int main(int argc, char** argv) {
     const std::string command = argv[1];
     if (command == "-h" || command == "--help" || command == "help") {
         usage();
+        return 0;
+    }
+    if (command == "--version" || command == "version") {
+        std::printf("bitwise %s\n", BW_VERSION);
         return 0;
     }
     if (command == "crc-catalog") {

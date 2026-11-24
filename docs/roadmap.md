@@ -1,10 +1,9 @@
 # Roadmap
 
-This is a plan, not a record of what exists. What works today is in the
-[README](../README.md): the skeleton of the pipeline, end to end, on synthetic
-Modbus RTU captures. What is described below beyond it is intended and
-unwritten, and the order is a proposal that the first results are allowed to
-change.
+This is the plan that the project followed to 1.0, and what was left out of it.
+What the library does is in the [README](../README.md), and what 1.0 freezes is in
+[api.md](api.md). What is described below as intended and not done is not a promise:
+the plan ended at 1.0, and these are ideas.
 
 ## Scope and principles
 
@@ -56,8 +55,10 @@ the library useful as it is, and it ends:
    a property test over thousands of seeds, in place of the named protocols of
    waves 2 and 3. What it found was fixed in the same pull request: see
    [Baseline over made-up protocols](#baseline-over-made-up-protocols).
-4. **1.0**: thresholds taken from the baselines, the API frozen, the README and
-   this document saying what the library does and does not, and the release.
+4. **Done**, 1.0: thresholds taken from the baselines (see [Thresholds](#thresholds)),
+   the API frozen ([api.md](api.md)), the README and this document saying what the
+   library does and does not, `bitwise --version`, and the release notes
+   (`docs/releases/v1.0.0.md`, which the release job publishes).
 
 Out of scope, so that it does not come back as a promise: the named protocols of
 waves 2 and 3 (Modbus ASCII and TCP, LIN, Dynamixel, SBUS, CAN with DBC, DMX512),
@@ -114,9 +115,9 @@ are often what decides: the CRC settles where a frame ends.
 
 ### Shape of the public API
 
-A proposal that keeps the Python bindings (B5) cheap, from what bridgefex
+The shape that keeps the Python bindings (B5) cheap, from what bridgefex
 accepted and rejected (see [Related projects](#related-projects-no-shared-code)).
-It applies to the stage APIs from now on; the existing CRC headers are bound
+The bound headers (the table of [api.md](api.md)) follow it; the CRC headers are bound
 through a facade instead:
 
 - Public headers use the `<cstdint>` types, not aliases such as `bw::u8`.
@@ -401,11 +402,12 @@ later, and several will lean on code written for Track A.
      the parametric generator. (b) What is left of the step is
      in [Scope of 1.0](#scope-of-10): wide numbers and lengths of kinds of one size
      (text is done, in the step after).
-- **Versions.** A minor version once the skeleton works, and 1.0 when the plan
-  in [Scope of 1.0](#scope-of-10) is done: the API stable, and the stages meeting
-  thresholds taken from the baselines.
-- **Where it ends.** At 1.0. Track B and the named protocols of waves 2 and 3
-  are not planned. The largest unknown stays unknown: no real capture has gone
+- **Versions.** 0.x until the plan in [Scope of 1.0](#scope-of-10) was done; 1.0.0 is that:
+  the API stable ([api.md](api.md): semantic versioning from here), and the stages
+  meeting thresholds taken from the baselines. A better stage that finds more is a
+  minor version, since what the pipeline infers is not frozen.
+- **Where it ends.** At 1.0. Track B and the named protocols of
+  waves 2 and 3 are not planned. The largest unknown stays unknown: no real capture has gone
   through the tool, a synthetic corpus can only flatter what its author thought
   of, and the README says so.
 
@@ -638,6 +640,42 @@ among others of 40, in 1 protocol of 1000) are not cut as lines, as in stage 3 f
 checksum that explain the same sentences (in 7 of 1235 types, a constant address whose bytes
 XOR to the star: covering the address and not the star is the same as covering the star and not the
 address) are two answers, and the checksum is not reported; and the numbers in text are text.
+
+### Thresholds
+
+What the tests hold the library to, taken from the baselines above and kept a few points
+below them, so that a sweep of 300 protocols or of 3000 passes by the same margin and a change
+that makes a stage worse does not. The sweeps run in CI (800 protocols of bytes and 600 of
+text, with gcc in RelWithDebInfo) and anywhere with `BW_SWEEP_SEEDS=N bw_tests
+-tc="synthetic sweep*"` (or `"text sweep*"`); the unit tests hold smaller samples (25 to 60
+protocols) to the looser lines that they can hold. To raise a baseline, change the table and the
+test in one commit.
+
+Made-up protocols of bytes (`tests/test_synthetic.cpp`), 200 frames each:
+
+| The line | Frames | Checksum, right | Wrong | Boundaries | Exact fields |
+|---|---|---|---|---|---|
+| as it is | 1.000 → 0.999 | 0.998 → 0.99 | 0 → 0.001 | 0.903 → 0.87 | 0.691 → 0.65 |
+| 1 frame in 50 with a byte wrong | 0.995 → 0.99 | 0.978 → 0.96 | 0 → 0.001 | 0.901 → 0.87 | 0.682 → 0.65 |
+| 1 frame in 20 lost | 1.000 → 0.999 | 0.997 → 0.99 | 0 → 0.001 | 0.905 → 0.87 | 0.691 → 0.65 |
+| 1 in 20 wrong and 1 in 20 lost | 0.975 → 0.96 | 0.912 → 0.88 | 0.0005 → 0.005 | 0.892 → 0.86 | 0.666 → 0.62 |
+
+(baseline → threshold; a checksum where there is none is held to 0, and for the first and
+third lines every protocol must have every one of its frames.)
+
+Made-up protocols of text (`tests/test_synthetic_text.cpp`), 200 sentences each:
+
+| The line | Frames | Types found | Checksum, right | Fields as many as the truth's | Types of no true kind |
+|---|---|---|---|---|---|
+| as it is | 0.999 → 0.998 | 1.000 → 0.998 | 0.994 → 0.985 | 0.995 → 0.985 | 0 → 0 |
+| 1 frame in 50 with a byte wrong | 0.997 → 0.995 | 1.000 → 0.998 | 0.988 → 0.97 | 0.991 → 0.975 | 0.003 → 0.01 |
+| 1 frame in 20 lost | 0.999 → 0.998 | 1.000 → 0.998 | 0.994 → 0.985 | 0.995 → 0.985 | 0 → 0 |
+| 1 in 20 wrong and 1 in 20 lost | 0.993 → 0.985 | 0.998 → 0.995 | 0.965 → 0.94 | 0.975 → 0.95 | 0.031 → 0.05 |
+
+The named protocols are held exactly, by the tests of each (`tests/test_nmea.cpp`,
+`tests/test_ubx_mavlink.cpp`, `tests/test_mavlink2.cpp`, `tests/test_unstuff.cpp`): the
+framing found, the types found and the checksum, for the captures that the second
+implementation in Python writes again.
 
 ## Related projects (no shared code)
 

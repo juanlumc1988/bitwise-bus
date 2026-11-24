@@ -7,7 +7,8 @@
 # a v* tag publishes them as a GitHub release.
 #
 # Releasing: set `project(bitwise-bus VERSION x.y.z ...)` in CMakeLists.txt,
-# merge, then
+# write docs/releases/vX.Y.Z.md (the notes of the release; without it GitHub makes
+# them from the commits), merge, then
 #     git tag vX.Y.Z && git push origin vX.Y.Z
 # Every job checks the tag against the project version before building.
 
@@ -131,6 +132,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Only the notes of the release, if the tag has some: docs/releases/<tag>.md.
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: docs/releases
+
       - uses: actions/download-artifact@v4
         with:
           pattern: package-*
@@ -148,9 +154,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
+          # The notes written for the tag, else the ones GitHub makes from the commits.
+          notes=(--generate-notes)
+          if [ -f "docs/releases/$TAG.md" ]; then
+            notes=(--notes-file "docs/releases/$TAG.md")
+          fi
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
           else
-            gh release create "$TAG" dist/* --title "$TAG" --generate-notes \
+            gh release create "$TAG" dist/* --title "$TAG" "${notes[@]}" \
               --verify-tag --repo "$GITHUB_REPOSITORY"
           fi
