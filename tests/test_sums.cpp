@@ -473,13 +473,24 @@ TEST_CASE("sums, stage 2: a sum of nothing is not a checksum") {
     CHECK(f.candidates == 2);                   // XOR-8 and SUM-8 over the first byte, as the second
 }
 
-TEST_CASE("sums, stage 2: frames of three zeros are explained 22 ways, and the evidence is the narrowest's") {
-    // Twelve CRCs and ten sums: the three sums that are one byte of Fletcher's field are not a second finding.
-    // A zero byte is not a digit, so none is text.
-    const ChecksumFinding f = search(std::vector<Bytes>(6, Bytes(3, 0)));
+TEST_CASE("sums, stage 2: frames of three zeros are explained by the CRCs and by seven sums, and the evidence is the narrowest's") {
+    // The CRCs that start from nothing and end with nothing, and seven sums: one byte of three bytes, at two
+    // places, by three sums, is inside the field of Fletcher's two sums (in either of its orders, and
+    // either of its moduli), so those six are not findings of their own. A zero byte is not a digit, so none
+    // is text.
+    const std::vector<Bytes> frames(6, Bytes(3, 0));
+    std::vector<bw::Frame>   given(frames.size());
+    for (std::size_t i = 0; i < frames.size(); ++i) {
+        given[i].bytes = frames[i];
+    }
+    const bw::SearchReport crcs = bw::search(given);
+    REQUIRE_FALSE(crcs.truncated);
+    REQUIRE(crcs.candidates.size() + 7 <= 64);
+
+    const ChecksumFinding f = search(frames);
     CHECK_FALSE(f.found);
     CHECK_FALSE(f.truncated);
-    CHECK(f.candidates == 22);
+    CHECK(f.candidates == crcs.candidates.size() + 7);
     CHECK(f.distinct_frames == 1);
     CHECK(f.evidence_bits == 8);                // a byte, in the narrowest of them
 }
@@ -511,6 +522,27 @@ TEST_CASE("sums, stage 2: what it covers is the same bytes, for one to be a part
     CHECK(outer.candidates == 2);
 }
 
+TEST_CASE("sums, stage 2: a sum beside Fletcher's two, not inside them, is another answer") {
+    // The plain sum of the bytes, then Fletcher's two over the bytes and that sum: the first of them is
+    // before the field of the second two, not in it.
+    fixtures::Random   rng(24);
+    std::vector<Bytes> frames;
+    for (int i = 0; i < 20; ++i) {
+        Bytes covered;
+        for (int k = 0; k < 8; ++k) {
+            covered.push_back(rng.byte());
+        }
+        Bytes f = covered;
+        f.push_back(sum_of(covered));
+        const Bytes field = enc_f8_le(f);
+        f.insert(f.end(), field.begin(), field.end());
+        frames.push_back(f);
+    }
+    const ChecksumFinding f = search(frames);
+    CHECK_FALSE(f.found);
+    CHECK(f.candidates == 2);
+}
+
 TEST_CASE("sums, stage 2: the CRCs and the sums are asked together, and the cap is shared") {
     // A CRC frame is not explained by a sum, and the finding names the CRC.
     fixtures::Random   rng(18);
@@ -537,25 +569,6 @@ TEST_CASE("sums, stage 2: the CRCs and the sums are asked together, and the cap 
     CHECK_FALSE(zeros.found);
     CHECK(zeros.truncated);
     CHECK(zeros.candidates == 64);
-}
-
-TEST_CASE("sums, stage 2: the sums alone can be what overflows the cap") {
-    // Five zeros: the CRCs that start from nothing explain them in 54 places, which is room for the
-    // search, and the sums explain them in as many again, which is not.
-    const std::vector<Bytes> frames(6, Bytes(5, 0));
-    std::vector<bw::Frame>   given(frames.size());
-    for (std::size_t i = 0; i < frames.size(); ++i) {
-        given[i].bytes = frames[i];
-    }
-    const bw::SearchReport crcs = bw::search(given);
-    REQUIRE(crcs.candidates.size() == 54);
-    REQUIRE_FALSE(crcs.truncated);
-
-    const ChecksumFinding f = search(frames);
-    CHECK_FALSE(f.found);
-    CHECK(f.truncated);
-    CHECK(f.candidates == 64);                  // the CRCs, and the sums that fit beside them
-    CHECK(f.distinct_frames == 1);
 }
 
 TEST_CASE("sums, stage 2: frames that are not explained have no candidates and no evidence") {

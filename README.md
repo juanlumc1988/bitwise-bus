@@ -105,8 +105,9 @@ is eight times slower and buys two things worth more than the speed:
   against a handful of short frames. Building a 256-entry table to checksum
   twelve bytes loses badly.
 
-The catalogue holds 20 algorithms, each carrying its published check value
-(the CRC of `123456789`), and the test suite verifies every one on each run.
+The catalogue holds 66 algorithms, from 8 bits to 64, each carrying its published
+check value (the CRC of `123456789`), and the test suite verifies every one on
+each run, and that each is the only answer for frames that use it.
 A mistyped parameter is worse than a missing one: it silently never matches,
 and the tool reports "nothing found" for a protocol that is right there in
 the list.
@@ -117,8 +118,8 @@ Finding a match is easy. Knowing whether it means anything is the actual
 problem, and it is where a tool like this earns or loses trust.
 
 A wrong candidate validates *N* frames of *W*-bit checksum by chance with
-probability 2^-(N·W). Against a search space of roughly 2^10 candidates, the
-expected number of false positives is 2^(10 − N·W) — so it takes about 17
+probability 2^-(N·W). Against a search space of roughly 2^11 candidates, the
+expected number of false positives is 2^(11 − N·W) — so it takes about 18
 bits of evidence before a single match is more likely right than lucky, and
 32 before it stops being worth worrying about.
 
@@ -339,7 +340,7 @@ simplest thing that can work, and each is to be deepened (see the
   21-bit widths correctly, and the catalogue includes CAN and CAN-FD. But
   *locating* such a field in a capture needs bit-level framing, so
   `crc-find` skips those widths rather than guessing.
-- **Uncatalogued polynomials.** The search tries 20 known algorithms. A
+- **Uncatalogued polynomials.** The search tries 66 known algorithms. A
   protocol using a polynomial nobody catalogued needs a real search of the
   parameter space — which has a neat shortcut, since for a fixed width and
   reflection the polynomial can be recovered algebraically from a few frames

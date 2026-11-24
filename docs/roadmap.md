@@ -307,11 +307,19 @@ later, and several will lean on code written for Track A.
      byte of separator between what they cover and them: Fletcher-8 of UBX, and the
      `*hh` of NMEA. A sum that is the first byte of a wider one over the same bytes
      (Fletcher's first sum is the plain sum) is a part of it and not a second
-     answer. The rest, in the order it is likely to go in: more CRCs of the
-     catalogue; and a CRC with a hidden seed byte (MAVLink's CRC_EXTRA), which needs
-     the frames grouped by message id and so belongs partly to stage 4. Modbus
-     ASCII's LRC is over the bytes that its hexadecimal text stands for, which is
-     wave 2;
+     answer. (d) Done: the catalogue has 66 algorithms, 45 more than at the start
+     of the step (the CRC-8, -16, -32 and -64 of the CRC RevEng catalogue that
+     turn up on buses and in protocols, each with its published check value and
+     checked besides against a reference of its own written in Python). The step found two things that
+     the search had to learn: a CRC that holds a narrower one (the polynomial of
+     CRC-16/LJ1200 is a multiple of the one of CRC-8/GSM-A, and CRC-64/ECMA-182
+     holds CRC-16/UMTS) is one answer and not two, as with the sums; and
+     CRC-8/AUTOSAR and CRC-8/OPENSAFETY are the same function for payloads of
+     127 bytes (x has order 127 modulo their polynomial), so there the search
+     rightly says it cannot tell. The rest, in the order it is likely to go in: a
+     CRC with a hidden seed byte (MAVLink's CRC_EXTRA), which needs the frames
+     grouped by message id and so belongs partly to stage 4. Modbus ASCII's LRC is
+     over the bytes that its hexadecimal text stands for, which is wave 2;
   6. stages 4 and 5: length fields, fields of varying size, text, and the
      numbers of two bytes whose high byte never changes.
 - **Versions.** A minor version once the skeleton works, and one per completed

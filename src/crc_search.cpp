@@ -12,6 +12,19 @@ namespace {
 // header for where the number comes from.
 const u32 kConfidentEvidenceBits = 32;
 
+// A CRC whose polynomial is a multiple of a narrower one's, with neither init nor final xor, leaves the
+// narrower one's CRC in its own bytes: over the frame less its last byte, CRC-16/LJ1200 (0x6F63) is explained
+// by CRC-8/GSM-A (0x1D) as well, and CRC-64/ECMA-182 by CRC-16/UMTS. The narrower CRC says nothing the
+// wider does not, so it is not another answer: one whose field is inside the field of another, and which
+// starts covering at the same place, is a part of it.
+bool is_part_of(const Candidate& part, const Candidate& whole) {
+    const Layout& p = part.layout;
+    const Layout& w = whole.layout;
+    return p.header_skip == w.header_skip && p.width < w.width &&
+           p.trailer_skip >= w.trailer_skip &&
+           p.trailer_skip + p.field_bytes() <= w.trailer_skip + w.field_bytes();
+}
+
 } // namespace
 
 bool Layout::fits(std::size_t frame_len) const {
@@ -166,6 +179,18 @@ SearchReport search(const std::vector<Frame>& frames,
             }
         }
     }
+
+    std::vector<Candidate> whole;
+    for (std::size_t i = 0; i < report.candidates.size(); ++i) {
+        bool part = false;
+        for (std::size_t j = 0; j < report.candidates.size() && !part; ++j) {
+            part = is_part_of(report.candidates[i], report.candidates[j]);
+        }
+        if (!part) {
+            whole.push_back(report.candidates[i]);
+        }
+    }
+    report.candidates = whole;
 
     // Evidence is measured against the narrowest checksum that matched --
     // the weakest claim among the candidates -- and counts DISTINCT frames.

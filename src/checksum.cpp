@@ -106,10 +106,11 @@ std::vector<SumLayout> forms_of(const SumSpec& spec) {
     return forms;
 }
 
-// Is `part` a piece of `whole`? Over the same bytes, with the same start, a sum written as a byte at the
-// end of the field of a wider one is that one seen through a narrower window: Fletcher's first sum is the
-// plain sum of the bytes, so wherever it explains a frame in two bytes it also explains it in one. That is
-// one finding, not two, and the wider is the one that says what the frame holds.
+// Is `part` a piece of `whole`? A sum written as a byte inside the field of a wider one, over bytes that
+// start at the same place, is that one seen through a narrower window: Fletcher's first sum is the plain
+// sum of the bytes, so wherever it explains a frame in two bytes it also explains it in one. That is one
+// finding, not two, and the wider is the one that says what the frame holds. (The same rule is applied to
+// the CRCs, in bw/crc_search.cpp.) A text one has no part: its characters are not the sum's bytes.
 bool is_part_of(const SumHit& part, const SumHit& whole) {
     const SumLayout& p = part.layout;
     const SumLayout& w = whole.layout;
@@ -118,8 +119,8 @@ bool is_part_of(const SumHit& part, const SumHit& whole) {
     }
     const std::size_t p_field = p.field_bytes(*part.spec);
     const std::size_t w_field = w.field_bytes(*whole.spec);
-    // They end what they cover at the same place, and the field of the wider one holds the narrower's.
-    return p.trailer_skip + p_field == w.trailer_skip + w_field && w_field > p_field;
+    return w_field > p_field && p.trailer_skip >= w.trailer_skip &&
+           p.trailer_skip + p_field <= w.trailer_skip + w_field;
 }
 
 // Every sum, in every form, at every place the CRCs are looked for.
