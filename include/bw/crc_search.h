@@ -4,7 +4,7 @@
 // Given frames off an undocumented bus, work out which CRC the device uses,
 // where the checksum sits, and what it covers.
 //
-// The search space is small enough to walk exhaustively: a couple of dozen
+// The search space is small enough to walk exhaustively: a few dozen
 // plausible algorithms, times a few candidate positions for the checksum
 // field, times a few candidate starts for the covered range. A few thousand
 // evaluations against a handful of short frames is microseconds, so there is
@@ -14,8 +14,8 @@
 // match means anything.
 //
 // A wrong candidate validates N frames of W-bit checksum by chance with
-// probability 2^-(N*W). With a search space of roughly 2^10 candidates, the
-// expected number of false positives is 2^(10 - N*W), so it takes about 17
+// probability 2^-(N*W). With a search space of roughly 2^11 candidates, the
+// expected number of false positives is 2^(11 - N*W), so it takes about 18
 // bits of evidence before a single match is more likely right than lucky,
 // and 32 bits before it is not worth worrying about. One 8-bit checksum on
 // one frame proves nothing whatsoever, and a tool that reported it as an
@@ -90,6 +90,11 @@ struct SearchOptions {
 };
 
 struct SearchReport {
+    // Every explanation of all the frames, but one that only repeats another:
+    // a CRC whose field is inside the field of a wider one, from the same
+    // place, is a part of it (the polynomial of CRC-16/LJ1200 is a multiple of
+    // the one of CRC-8/GSM-A, and a frame that ends in the first is explained
+    // by the second over the bytes before its last).
     std::vector<Candidate> candidates;
 
     std::size_t frames         = 0;

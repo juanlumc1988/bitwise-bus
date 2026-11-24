@@ -105,6 +105,131 @@ TEST_CASE("every byte-aligned algorithm in the catalogue is recoverable") {
     }
 }
 
+TEST_CASE("every byte-aligned algorithm is told from all the others, at the lengths a bus has") {
+    // Recoverable is not enough: with 60-odd entries, two that give the same value on every frame of a
+    // length would make every search at that length ambiguous. Each one is the only answer, with the
+    // layout it was built with, for payloads of 8 bytes to a few hundred (a payload shorter than the CRC
+    // is not a case: the CRC of one byte has bytes that never change, and a narrower CRC explains those).
+    // The one length with a pair of algorithms that are the same function is the next test's.
+    const std::size_t lengths[] = { 8, 16, 31, 64, 126, 128, 250 };
+    for (std::size_t i = 0; i < bw::catalog_size(); ++i) {
+        const bw::CrcSpec& spec = bw::catalog()[i];
+        if (spec.width % 8u != 0) {
+            continue;
+        }
+        for (std::size_t l = 0; l < sizeof(lengths) / sizeof(lengths[0]); ++l) {
+            CAPTURE(std::string(spec.name));
+            CAPTURE(lengths[l]);
+            bw::Layout layout;
+            layout.width      = spec.width;
+            layout.big_endian = true;
+            const bw::SearchReport report = bw::search(synthesise(spec, layout, 12, lengths[l], 0x5EED00u + i));
+            REQUIRE(report.candidates.size() == 1);
+            CHECK(report.candidates[0].spec == &spec);
+            CHECK(report.candidates[0].layout.header_skip == 0);
+            CHECK(report.candidates[0].layout.trailer_skip == 0);
+            CHECK(report.confident());
+        }
+    }
+}
+
+TEST_CASE("two algorithms that are the same function at one length are two candidates at that length") {
+    // CRC-8/AUTOSAR and CRC-8/OPENSAFETY have the same polynomial, and differ in the initial value and the
+    // final xor. The initial value's share of a CRC over n bytes is that value times x^(8n) modulo the
+    // polynomial, and for this polynomial x has order 127: at 127 bytes it is the value itself, and the
+    // two differences cancel. That is a fact about the algorithms and not a miss of the search.
+    const bw::CrcSpec* autosar    = bw::catalog_find("CRC-8/AUTOSAR");
+    const bw::CrcSpec* opensafety = bw::catalog_find("CRC-8/OPENSAFETY");
+    REQUIRE(autosar != nullptr);
+    REQUIRE(opensafety != nullptr);
+    bw::Layout layout;
+    layout.width = 8;
+    for (std::size_t n = 125; n <= 129; ++n) {
+        CAPTURE(n);
+        const bw::SearchReport report = bw::search(synthesise(*autosar, layout, 12, n, 77));
+        CHECK(contains(report, "CRC-8/AUTOSAR"));
+        CHECK(contains(report, "CRC-8/OPENSAFETY") == (n == 127));
+        CHECK(report.unique() == (n != 127));
+        CHECK(report.confident() == (n != 127));
+    }
+}
+
+TEST_CASE("a CRC that holds a narrower one is one answer, not two") {
+    // The polynomial of CRC-16/LJ1200 is a multiple of the one of CRC-8/GSM-A, and neither starts from
+    // anything nor ends with a xor; so a frame that ends in the first has, over the bytes before its last,
+    // the second as well. CRC-64/ECMA-182 holds CRC-16/UMTS the same way. The narrower is a part of the
+    // wider, and the evidence is the wider's.
+    struct Row {
+        const char* wide;
+        const char* narrow;
+    };
+    const Row rows[] = { { "CRC-16/LJ1200", "CRC-8/GSM-A" }, { "CRC-64/ECMA-182", "CRC-16/UMTS" } };
+    for (std::size_t r = 0; r < sizeof(rows) / sizeof(rows[0]); ++r) {
+        const bw::CrcSpec* wide   = bw::catalog_find(rows[r].wide);
+        const bw::CrcSpec* narrow = bw::catalog_find(rows[r].narrow);
+        REQUIRE(wide != nullptr);
+        REQUIRE(narrow != nullptr);
+        CAPTURE(std::string(rows[r].wide));
+        for (std::size_t trailer = 0; trailer <= 2; ++trailer) {
+            CAPTURE(trailer);
+            bw::Layout layout;
+            layout.width        = wide->width;
+            layout.big_endian   = true;
+            layout.trailer_skip = trailer;
+            const std::vector<bw::Frame> frames = synthesise(*wide, layout, 12, 20, 0xFACE00u + trailer);
+            // The narrower one does explain every frame, over the bytes up to its own last one...
+            // ...as its field is the last byte or bytes of the wider's, and what it covers is the rest.
+            bw::Layout inner;
+            inner.width        = narrow->width;
+            inner.big_endian   = true;
+            inner.trailer_skip = trailer;
+            REQUIRE(bw::verify(frames, inner, *narrow));
+            // And the search, which finds both, gives one.
+            const bw::SearchReport report = bw::search(frames);
+            REQUIRE(report.candidates.size() == 1);
+            CHECK(report.candidates[0].spec == wide);
+            CHECK(report.evidence_bits == 12u * wide->width);
+            CHECK(report.confident());
+        }
+    }
+}
+
+TEST_CASE("a CRC beside another CRC, not inside it, is another answer") {
+    // A frame with a CRC-16 and, over everything before it, a CRC-8 (or the other way round) has two
+    // checksums, and both are findings: neither is in the field of the other.
+    const bw::CrcSpec* wide   = bw::catalog_find("CRC-16/MODBUS");
+    const bw::CrcSpec* narrow = bw::catalog_find("CRC-8");
+    REQUIRE(wide != nullptr);
+    REQUIRE(narrow != nullptr);
+    for (int order = 0; order < 2; ++order) {
+        CAPTURE(order);
+        reseed(0xC0DE00u + static_cast<u64>(order));
+        std::vector<bw::Frame> frames;
+        for (int f = 0; f < 12; ++f) {
+            bw::Frame frame;
+            for (int i = 0; i < 10; ++i) {
+                frame.bytes.push_back(next_byte());
+            }
+            // order 0: the CRC-16, then the CRC-8 over both; order 1: the CRC-8, then the CRC-16 over both.
+            const bw::CrcSpec& first  = order == 0 ? *wide : *narrow;
+            const bw::CrcSpec& second = order == 0 ? *narrow : *wide;
+            for (int pass = 0; pass < 2; ++pass) {
+                const bw::CrcSpec& spec  = pass == 0 ? first : second;
+                const u64          value = bw::crc_compute(spec, frame.bytes.data(), frame.bytes.size());
+                for (int b = spec.width / 8 - 1; b >= 0; --b) {
+                    frame.bytes.push_back(static_cast<u8>((value >> (8 * b)) & 0xFFu));
+                }
+            }
+            frames.push_back(frame);
+        }
+        const bw::SearchReport report = bw::search(frames);
+        CHECK(report.candidates.size() == 2);
+        CHECK(contains(report, "CRC-16/MODBUS"));
+        CHECK(contains(report, "CRC-8"));
+        CHECK_FALSE(report.unique());
+    }
+}
+
 TEST_CASE("the layout is recovered, not just the algorithm") {
     const bw::CrcSpec* spec = bw::catalog_find("CRC-16/MODBUS");
     REQUIRE(spec != nullptr);
