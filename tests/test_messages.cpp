@@ -872,3 +872,20 @@ TEST_CASE("analyze: a run of bytes with no structure across the start of the len
     const bw::Analysis a = analysis_of(frames);
     CHECK(a.type_count() == 40);
 }
+
+TEST_CASE("message kinds: a frame shorter than the header is in no kind, and is not read beyond its end") {
+    // Two frames of 3 bytes among the rest: the key is at offset 2 and the length at 1, so the shortest of them
+    // holds both, and a frame of 2 bytes holds neither. Under a sanitizer, a read past the end of either fails.
+    std::vector<Bytes> frames = make_frames(70, two_messages());
+    frames.push_back(Bytes({ 0xAA, 0x04, 0x01 }));
+    frames.push_back(Bytes({ 0xAA, 0x05 }));
+    frames.push_back(Bytes({ 0xAA }));
+    const bw::MessageKinds k = kinds_of(frames);
+    REQUIRE(k.found);
+    REQUIRE(k.frame_kind.size() == frames.size());
+    CHECK(k.frame_kind[50] == -1);                    // the shortest is shorter than the header: 3 bytes of 6
+    CHECK(k.frame_kind[51] == -1);
+    CHECK(k.frame_kind[52] == -1);
+    CHECK(k.kinds[0].frames == 20);
+    CHECK(k.kinds[1].frames == 20);
+}
