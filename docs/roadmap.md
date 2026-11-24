@@ -23,11 +23,41 @@ change.
   has an *unknown* answer. Random, encrypted or compressed payloads have to
   come out as "no structure found", the way random bytes already come out as
   "no CRC found".
-- **Synthetic first, real welcome.** There are no real captures yet, so every
-  stage is built and measured against synthetic ones with a known answer.
-  Real captures are welcome later (see [Corpus](#the-synthetic-corpus)).
+- **Synthetic first, real welcome.** There are no real captures, and the author
+  has no way to make any, so every stage is built and measured against
+  synthetic ones with a known answer, and the project closes that way. What it
+  says about real buses is what published test vectors and the specifications
+  of the protocols it generates support, and no more. Real captures are
+  welcome (see [Corpus](#the-synthetic-corpus)).
 - **Deterministic output.** The same capture gives the same bytes, in every
   exporter: no timestamps, no absolute paths, stable ordering.
+
+## Scope of 1.0
+
+The plan was longer, and it was cut on 24 November 2026, for being more than one
+person can review: twenty to thirty pull requests more. What remains is what makes
+the library useful as it is, and it ends:
+
+1. **Done**: capture model and importers, segmentation (gaps, flags with stuffing,
+   a sync byte and a length, lines of text), stage 2 (66 CRCs, five sums, text
+   checksums, a hidden byte), message types by discriminator when a kind has
+   frames of several sizes, the Kaitai exporter, the harness and six protocols
+   to measure against.
+2. **Fields of stages 4 and 5**, in one pull request: numbers of two or three
+   bytes whose high bytes never change as one field, lengths in kinds of one
+   size, and text (NMEA 0183: fields separated by a character, of varying size).
+3. **The parametric generator**, with noise (corrupted bytes, lost frames) and a
+   property test over thousands of seeds, in place of the named protocols of
+   waves 2 and 3. What it finds is fixed in the same pull request.
+4. **1.0**: thresholds taken from the baselines, the API frozen, the README and
+   this document saying what the library does and does not, and the release.
+
+Out of scope, so that it does not come back as a promise: the named protocols of
+waves 2 and 3 (Modbus ASCII and TCP, LIN, Dynamixel, SBUS, CAN with DBC, DMX512),
+all of Track B (stimulus labelling, session state machines, live capture, bit-level
+framing, Python bindings as a product, rewind-mcu interop, a Qt viewer), the
+exporters other than Kaitai, and real captures. The tables below keep them as
+ideas; they are not a plan. Pull requests are as large as what they do needs.
 
 ## Architecture
 
@@ -150,7 +180,12 @@ constants are `contents` and that the parser refuses a frame where they are wron
 a third definition, checked in and compared with the exporter's output by the unit
 tests, holds every kind of field the exporter writes (all the integer and float widths
 and byte orders, text, bytes, constants of several bytes in both orders) and is read
-with expected values. The script is a job of the CI workflow, with the compiler and
+with expected values. A fourth case (MAVLink 2, two seeds of 300 frames) is a type of several sizes: each
+frame is read by the definitions of the four types, which the constants of three of
+them refuse, so it is read by exactly one; the payload is `size: length`, the parser
+uses all of the frame and writes it back, and what it reads as the CRC is the
+CRC-16/MCRF4XX of the frame and the CRC_EXTRA of its message, worked out in the
+script. The script is a job of the CI workflow, with the compiler and
 the runtime at fixed versions.
 
 ### Then, stage by stage
@@ -238,12 +273,12 @@ later, and several will lean on code written for Track A.
 
 ## Delivery
 
-- **Pull requests.** One concern each, reviewable in one sitting, around 800
-  changed lines of code at most, not counting tests, documentation, vendored
-  code, fixtures and golden files: tests are as large as what they test and
-  are read differently. `main` stays green and releasable after every merge. A stage stays
-  behind its interface until it is wired in, so unfinished work never reaches
-  the command line.
+- **Pull requests.** One concern each, as large as it needs: there is no fixed
+  limit since the scope was cut (it was around 800 changed lines of code, not
+  counting tests, documentation, vendored code, fixtures and golden files), and
+  a large one says in its description what to read first. `main` stays green and
+  releasable after every merge. A stage stays behind its interface until it is
+  wired in, so unfinished work never reaches the command line.
 - **The skeleton is five pull requests,** along its seams. It was three until
   the size limit above said otherwise, then four:
   1. the capture model and its file format (done: see
@@ -334,18 +369,32 @@ later, and several will lean on code written for Track A.
      make up the difference (CRC-8 and CRC-8/I-432-1: two candidates). The rest:
      Modbus ASCII's LRC is over the bytes that its hexadecimal text stands for,
      which is wave 2;
-  6. stages 4 and 5: length fields, fields of varying size, text, and the
-     numbers of two bytes whose high byte never changes.
-- **Versions.** A minor version once the skeleton works, and one per completed
-  wave afterwards. 1.0 when the API is stable and the stages meet thresholds
-  across the corpus. The thresholds are set once the harness gives a baseline,
-  not before.
-- **Where it ends.** The pipeline is finished when 1.0 is: the three waves, the
-  parametric generator (which matters more than any list of protocols), and the
-  thresholds. Track B is independent and optional, feature by feature. The
-  largest unknown is not in this list: no real capture has gone through the tool
-  yet, and a few should before wave 3, because a synthetic corpus can only flatter
-  what its author thought of.
+  6. stages 4 and 5. (a) Done: **message types by discriminator**
+     (`bw/messages.h`). A kind of message whose frames have several sizes (MAVLink 2,
+     where the zeros at the end of a payload are not sent) was several types, one
+     for each size. Now stage 4 looks for a length field (one or two bytes, at an
+     offset below 16, whose value plus a constant is the size of every frame), for
+     the key (the offsets where every size has a single value and the sizes do not
+     all have the same one: the message id), and puts together the sizes with the
+     same key. Frames of a size too rare to be a type join the kind that has their
+     key and whose length says their size. The sizes are one message type only if
+     a checksum explains all of its frames (the same, with the same hidden byte),
+     because the length constant less what follows the payload says where the
+     payload starts: the type has the fields of its header, the length, the
+     payload sized by it, and the checksum. MAVLink 2 goes from seven types to the
+     four messages it has, and the model matches the truth's but for the id of three
+     bytes, which is three fields. The rest of the sizes is not put together when
+     a size is shared by two messages (the id is then not one value in it),
+     and a length that is wrong in a single frame stops it, which is for the noise of
+     the parametric generator. (b) What is left of the step is
+     in [Scope of 1.0](#scope-of-10): wide numbers, lengths of kinds of one size, and text.
+- **Versions.** A minor version once the skeleton works, and 1.0 when the plan
+  in [Scope of 1.0](#scope-of-10) is done: the API stable, and the stages meeting
+  thresholds taken from the baselines.
+- **Where it ends.** At 1.0. Track B and the named protocols of waves 2 and 3
+  are not planned. The largest unknown stays unknown: no real capture has gone
+  through the tool, a synthetic corpus can only flatter what its author thought
+  of, and the README says so.
 
 ### Wave 1 baseline
 
@@ -388,9 +437,18 @@ MAVLink 2 has the same two columns, none and exact, and one of its own: the
 payload is cut of its trailing zeros, so one message has frames of several
 sizes. Its sync byte is 0xFD and the length is at offset 1 plus 12, and the
 frames are found exactly. On 300 frames of seed 3 the true frames of the four
-messages have seven sizes, and the stages, which group by size, make seven message
-types of them; the CRC is found in all seven, with the byte of its message (50, 124,
-39 or 217).
+messages have seven sizes. By size they were seven message types, with the CRC found
+in all seven, with the byte of its message (50, 124, 39 or 217). With the types by
+discriminator they are **four**, the ones the generator has: HEARTBEAT, which is never
+cut, in one size of its own, and SYS_STATUS (31 to 43 bytes), ATTITUDE (36 to 40) and
+PROTOCOL_VERSION (17 to 18) each in one type of two sizes, with a length, a payload that
+the length sizes, and the CRC after it, like the truth. Against the truth, each of
+those three has 12 fields where it has 10 (the id of three bytes is three constants of a
+byte), finds all 9 of its boundaries and 11 in all, 7 fields exactly, and 6 of the right
+kind; by size they had up to 40 fields each. The CRC does not count as matching the
+truth yet, since the fields after a payload of no fixed size are compared by their
+index and the three constants of the id move it by two. The 30 frames of the corpus,
+5 of which were of a size too rare to be a type, now have none of them left over.
 
 NMEA 0183 is of another kind and has its own baseline, on 90 sentences of
 seed 3: by gaps, 30 frames are found where there are 90, none of them a true
@@ -612,6 +670,15 @@ the reason the README gives for `rewind-mcu`.
   the detail in the model, the Kaitai export, all seven sizes of MAVLink 2, and
   Modbus RTU, UBX, NMEA, PPP and SLIP as before (a CRC that has no byte is not
   said to have one, and SLIP, which has no checksum, has no candidates).
+
+  **After the types by discriminator** (`MessageTypeReport` gets
+  `largest_frame_bytes`) it was the same once more for the headers of the
+  skeleton: the same 45 files, no change to the annotations, one more field in a
+  dataclass. From Python, 14 checks pass: MAVLink 2 in four types (the sizes of each,
+  smallest and largest, all 300 frames in a type, the byte of each message), three of
+  them with a length and a payload that it sizes, the line of `describe_analysis`, the
+  export with `size: length`, and MAVLink 1, UBX, Modbus RTU, NMEA, PPP and SLIP as
+  before.
 
   Not tried: any platform other than Linux x86-64, threads, callbacks and
   directors, large captures, Python versions other than 3.13. To repeat the

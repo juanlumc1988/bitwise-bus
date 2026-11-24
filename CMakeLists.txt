@@ -46,6 +46,7 @@ add_library(bw_core STATIC
     src/crc.cpp
     src/catalog.cpp
     src/sums.cpp
+    src/messages.cpp
     src/crc_search.cpp
     src/capture.cpp
     src/model.cpp
@@ -152,7 +153,8 @@ if(BW_BUILD_TESTS)
         tests/test_sync.cpp
         tests/test_lines.cpp
         tests/test_unstuff.cpp
-        tests/test_sums.cpp)
+        tests/test_sums.cpp
+        tests/test_messages.cpp)
     target_include_directories(bw_tests PRIVATE tests/third_party)
     target_compile_definitions(bw_tests PRIVATE
         "BW_CORPUS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus\""
@@ -219,7 +221,7 @@ if(BW_BUILD_TESTS)
         "framing: between 0x7E, escape 0x7D: 0x7E as 0x7D 0x5E, 0x7D as 0x7D 0x5D.*message type 0 \"lcp_echo\".*\"magic_number\" +constant +32 bits @64 big-endian = 0xB7E9A31.*message type 2 \"ip_datagram\".*\"fcs\" +checksum +16 bits @224 little-endian covers 0..3 CRC-16/IBM-SDLC")
     add_test(NAME cli_synth_unknown COMMAND bitwise synth nope)
     set_tests_properties(cli_synth_unknown PROPERTIES PASS_REGULAR_EXPRESSION
-        "unknown protocol 'nope'; known: hdlc-ppp, mavlink1, mavlink2, modbus-rtu, nmea0183, slip, ubx")
+        "unknown protocol 'nope'[;] known: hdlc-ppp, mavlink1, mavlink2, modbus-rtu, nmea0183, slip, ubx")
     add_test(NAME cli_synth_bad_number COMMAND bitwise synth modbus-rtu --frames 100001)
     set_tests_properties(cli_synth_bad_number PROPERTIES PASS_REGULAR_EXPRESSION
         "--frames: '100001' is not a whole number from 0 to 100000")
@@ -232,30 +234,30 @@ if(BW_BUILD_TESTS)
     add_test(NAME cli_analyze
         COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_modbus_rtu_seed1_50frames_jitter300.csv)
     set_tests_properties(cli_analyze PROPERTIES PASS_REGULAR_EXPRESSION
-        "idle gap: a gap of at least 6918373 ns ends a frame.*type0 +8 bytes, 50 frames; checksum CRC-16/MODBUS, 16 bits little-endian, evidence 800 bits.*5 \"checksum\" +checksum +16 bits @48 little-endian covers 0..4")
+        "idle gap: a gap of at least 6918373 ns ends a frame.*type0 +8 bytes, 50 frames[;] checksum CRC-16/MODBUS, 16 bits little-endian, evidence 800 bits.*5 \"checksum\" +checksum +16 bits @48 little-endian covers 0..4")
     # And on the two captures of byte-stuffed protocols, which have no gaps to cut at: the flags, and the frames
     # read without them and unstuffed, so that the FCS of PPP is found.
     add_test(NAME cli_analyze_slip
         COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_slip_seed3_30frames.csv)
     set_tests_properties(cli_analyze_slip PROPERTIES PASS_REGULAR_EXPRESSION
-        "framing +flags: the byte 0xC0 bounds each frame \\(60 of them in the capture\\), stuffed.*frames +30\n+type0 +19 bytes, 16 frames; no checksum found.*type1 +10 bytes, 14 frames.*framing: between 0xC0")
+        "framing +flags: the byte 0xC0 bounds each frame \\(60 of them in the capture\\), stuffed.*frames +30\n+type0 +19 bytes, 16 frames[;] no checksum found.*type1 +10 bytes, 14 frames.*framing: between 0xC0")
     add_test(NAME cli_analyze_hdlc_ppp
         COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_hdlc_ppp_seed2_30frames.csv)
     set_tests_properties(cli_analyze_hdlc_ppp PROPERTIES PASS_REGULAR_EXPRESSION
-        "framing +flags: the byte 0x7E bounds each frame \\(90 of them in the capture\\), stuffed.*frames +30\n+type0 +14 bytes, 14 frames; checksum CRC-16/IBM-SDLC, 16 bits little-endian, evidence 224 bits.*framing: between 0x7E")
+        "framing +flags: the byte 0x7E bounds each frame \\(90 of them in the capture\\), stuffed.*frames +30\n+type0 +14 bytes, 14 frames[;] checksum CRC-16/IBM-SDLC, 16 bits little-endian, evidence 224 bits.*framing: between 0x7E")
     # And on the three of frames that start with a sync byte and say how long they are.
     add_test(NAME cli_analyze_ubx
         COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_ubx_seed1_30frames.csv)
     set_tests_properties(cli_analyze_ubx PROPERTIES PASS_REGULAR_EXPRESSION
-        "framing +sync byte 0xB5, frame size = the 1-byte length at offset 4 plus 8 \\(0 breaks in the chain\\).*frames +30.*type0 +14 bytes, 12 frames; checksum FLETCHER-8, 16 bits little-endian, evidence 144 bits.*type1 +24 bytes, 12 frames; checksum FLETCHER-8, 16 bits little-endian, evidence 192 bits.*type2 +10 bytes, 6 frames; no checksum found: 2 candidates that cannot be told apart.*framing: contiguous, nothing between frames")
+        "framing +sync byte 0xB5, frame size = the 1-byte length at offset 4 plus 8 \\(0 breaks in the chain\\).*frames +30.*type0 +14 bytes, 12 frames[;] checksum FLETCHER-8, 16 bits little-endian, evidence 144 bits.*type1 +24 bytes, 12 frames[;] checksum FLETCHER-8, 16 bits little-endian, evidence 192 bits.*type2 +10 bytes, 6 frames[;] no checksum found: 2 candidates that cannot be told apart.*framing: contiguous, nothing between frames")
     add_test(NAME cli_analyze_mavlink1
         COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_mavlink1_seed1_30frames.csv)
     set_tests_properties(cli_analyze_mavlink1 PROPERTIES PASS_REGULAR_EXPRESSION
-        "framing +sync byte 0xFE, frame size = the 1-byte length at offset 1 plus 8 \\(0 breaks in the chain\\).*frames +30.*type0 +39 bytes, 11 frames; checksum CRC-16/MCRF4XX seeded with 124, 16 bits little-endian, evidence 168 bits.*type1 +36 bytes, 10 frames; checksum CRC-16/MCRF4XX seeded with 39, 16 bits little-endian, evidence 152 bits.*type2 +17 bytes, 9 frames; checksum CRC-16/MCRF4XX seeded with 50")
+        "framing +sync byte 0xFE, frame size = the 1-byte length at offset 1 plus 8 \\(0 breaks in the chain\\).*frames +30.*type0 +39 bytes, 11 frames[;] checksum CRC-16/MCRF4XX seeded with 124, 16 bits little-endian, evidence 168 bits.*type1 +36 bytes, 10 frames[;] checksum CRC-16/MCRF4XX seeded with 39, 16 bits little-endian, evidence 152 bits.*type2 +17 bytes, 9 frames[;] checksum CRC-16/MCRF4XX seeded with 50")
     add_test(NAME cli_analyze_mavlink2
         COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_mavlink2_seed1_30frames.csv)
     set_tests_properties(cli_analyze_mavlink2 PROPERTIES PASS_REGULAR_EXPRESSION
-        "framing +sync byte 0xFD, frame size = the 1-byte length at offset 1 plus 12 \\(0 breaks in the chain\\).*frames +30 \\(5 of a size too rare.*type0 +43 bytes, 7 frames; checksum CRC-16/MCRF4XX seeded with 124, 16 bits little-endian, evidence 104 bits.*type3 +40 bytes, 6 frames; checksum CRC-16/MCRF4XX seeded with 39")
+        "framing +sync byte 0xFD, frame size = the 1-byte length at offset 1 plus 12 \\(0 breaks in the chain\\).*frames +30\n+type0 +31 to 43 bytes, 10 frames[;] checksum CRC-16/MCRF4XX seeded with 124, 16 bits little-endian, evidence 152 bits.*type1 +36 to 40 bytes, 8 frames[;] checksum CRC-16/MCRF4XX seeded with 39.*type2 +21 bytes, 6 frames[;] checksum CRC-16/MCRF4XX seeded with 50.*type3 +26 bytes, 6 frames[;] checksum CRC-16/MCRF4XX seeded with 217")
     # And on the one of text, whose sentences end with a line feed, with a second of silence after three.
     add_test(NAME cli_analyze_nmea0183
         COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_nmea0183_seed3_9frames_jitter300.csv)
@@ -285,12 +287,17 @@ if(BW_BUILD_TESTS)
         "meta:.*id: type0.*seq:.*id: field_0.*type: u1.*id: field_4.*contents: \\[0x00\\].*id: checksum.*type: u2le")
     add_test(NAME cli_export_id COMMAND bitwise export ${BW_CORPUS_50} --format kaitai --type 0 --id modbus_request)
     set_tests_properties(cli_export_id PROPERTIES PASS_REGULAR_EXPRESSION "id: modbus_request")
+    # A type of several sizes: the payload is sized by the length, and the CRC after it is read as a number.
+    add_test(NAME cli_export_sized_payload
+        COMMAND bitwise export ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_mavlink2_seed3_40frames_jitter300.csv --type 0)
+    set_tests_properties(cli_export_sized_payload PROPERTIES PASS_REGULAR_EXPRESSION
+        "id: length\n    type: u1.*id: payload\n    size: length\n.*id: checksum\n    type: u2le")
     add_test(NAME cli_export_bad_id COMMAND bitwise export ${BW_CORPUS_50} --id Bad)
     set_tests_properties(cli_export_bad_id PROPERTIES PASS_REGULAR_EXPRESSION
         "'Bad' is not a Kaitai identifier")
     add_test(NAME cli_export_bad_format COMMAND bitwise export ${BW_CORPUS_50} --format wireshark)
     set_tests_properties(cli_export_bad_format PROPERTIES PASS_REGULAR_EXPRESSION
-        "unknown format 'wireshark'; known: kaitai")
+        "unknown format 'wireshark'[;] known: kaitai")
     add_test(NAME cli_export_bad_type COMMAND bitwise export ${BW_CORPUS_50} --type 3)
     set_tests_properties(cli_export_bad_type PROPERTIES PASS_REGULAR_EXPRESSION
         "--type 3: the analysis found 1 message type")

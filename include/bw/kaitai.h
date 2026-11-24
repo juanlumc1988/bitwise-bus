@@ -13,6 +13,9 @@
 //   - a number of 8, 16, 32 or 64 bits is `u1`, `u2be`, `u2le`, and so on
 //     (`f4be`, `f8le`... for a float), by its byte order; a whole number of
 //     bytes of any other size is read as that many bytes;
+//   - a field sized by an earlier length field (SizeKind::FromField) is `size:`
+//     and the name of that field, which has to be written as a number of 8, 16,
+//     32 or 64 bits: MAVLink's payload after its length;
 //   - payload, enumerations, counters and checksums are the plain numbers or
 //     bytes they are in memory, and `doc` says what the model found about them
 //     and how much evidence there is. Kaitai has no checksum type and cannot
@@ -24,8 +27,8 @@
 //
 // Fields that Kaitai could describe but this exporter does not write yet are
 // refused, not approximated: a field that is not a whole number of bytes, or
-// whose size depends on another field, or is delimited, or runs to the end.
-// The skeleton's stages produce none of them.
+// that is sized by a length that Kaitai has no integer for, or is delimited, or
+// runs to the end. The stages produce none of them but a length of 24 bits.
 
 #ifndef BW_KAITAI_H
 #define BW_KAITAI_H

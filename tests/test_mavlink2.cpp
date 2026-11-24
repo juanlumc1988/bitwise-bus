@@ -18,6 +18,7 @@
 
 #include "bw/analyze.h"
 #include "bw/crc.h"
+#include "bw/evaluate.h"
 #include "bw/protocol.h"
 #include "bw/segmentation.h"
 #include "golden.h"
@@ -338,30 +339,92 @@ TEST_CASE("mavlink2: the decoder refuses each way a frame can be wrong") {
     CHECK_FALSE(bw::protocol_conforms("mavlink2", frame_of(bw::generate_protocol("mavlink1", one), 0)));
 }
 
-TEST_CASE("mavlink2 baseline: no gaps to cut at, and sizes that are not message types") {
-    // Where this protocol starts: by gaps nothing is found, as with MAVLink 1. Given the true frames, they are grouped
-    // by size, and the same message has several sizes because its payload is cut: seven sizes for four messages
-    // in this capture (seed 3, 300 frames). In each size the CRC is found, with the byte of its message that the
-    // frames do not hold (CRC_EXTRA: 50, 124, 39 or 217), as for MAVLink 1.
+TEST_CASE("mavlink2 baseline: no gaps to cut at, and a type for each message whatever the size of its payload") {
+    // Where this protocol starts: by gaps nothing is found, as with MAVLink 1. Given the true frames, there are seven
+    // sizes for four messages in this capture (seed 3, 300 frames), because the payload is cut of its trailing
+    // zeros. Stage 4 finds the length (the byte at offset 1 plus 12) and the message id (bytes 7 and 8, the same in
+    // every frame of a message and different between messages), and the frames of the same message are one type:
+    // four, in which the CRC is found with the byte of its message that the frames do not hold (CRC_EXTRA: 50,
+    // 124, 39 or 217), as for MAVLink 1.
     const Dataset d = make(3, 300);
     CHECK_FALSE(bw::segment_by_gaps(d.capture(), bw::SegmentationOptions()).info().found);
 
     bw::SegmentationInfo info;
     info.found = true;
     const bw::Analysis a = bw::analyze_frames(d.capture(), bw::Segmentation(info, d.frames()), bw::AnalyzeOptions());
-    CHECK(a.type_count() == 7);
+    REQUIRE(a.type_count() == 4);
     CHECK(a.info().ignored_frames == 0);
+    std::uint32_t frames = 0;
+    std::set<std::uint32_t> seeds;
     for (std::size_t t = 0; t < a.type_count(); ++t) {
-        const bw::ChecksumFinding& c = a.type_report(t).checksum;
+        const bw::MessageTypeReport r = a.type_report(t);
+        const bw::ChecksumFinding& c = r.checksum;
         CAPTURE(t);
+        frames += r.frames;
         REQUIRE(c.found);
         CHECK(bw::checksum_algorithm_name(c.algorithm) == "CRC-16/MCRF4XX");
         CHECK(c.seeded);
-        CHECK((c.seed == 50 || c.seed == 124 || c.seed == 39 || c.seed == 217));
+        seeds.insert(c.seed);
         CHECK(c.header_skip == 1);              // the start byte is not covered
         CHECK(c.trailer_skip == 0);
         CHECK(c.width_bits == 16);
         CHECK(c.byte_order == bw::ByteOrder::Little);
         CHECK(c.evidence_bits >= 32);
     }
+    CHECK(frames == 300);
+    CHECK(seeds == std::set<std::uint32_t>({ 50, 124, 39, 217 }));
+
+    // The three messages that are cut have two sizes each, and the one that is not has one.
+    std::map<std::uint32_t, std::uint32_t> largest;                  // by smallest size
+    for (std::size_t t = 0; t < a.type_count(); ++t) {
+        largest[a.type_report(t).frame_bytes] = a.type_report(t).largest_frame_bytes;
+    }
+    std::map<std::uint32_t, std::uint32_t> expected;
+    expected[17] = 18;                          // PROTOCOL_VERSION
+    expected[21] = 21;                          // HEARTBEAT
+    expected[31] = 43;                          // SYS_STATUS
+    expected[36] = 40;                          // ATTITUDE
+    CHECK(largest == expected);
+
+    // Against the truth. A found type is of a message when the low byte of the id at offset 7 is the same. What the
+    // three messages that are cut have in the model is what the truth has: a length, a payload that it sizes, and the
+    // CRC after it; only the id, of three bytes, is three fields of a byte (one of them of the same value in all).
+    // The numbers are fields of the truth and found, boundaries of the truth, found and hit, exact fields, kinds.
+    struct Row {
+        const char* message;
+        unsigned    truth_fields, found_fields, truth_boundaries, found_boundaries, hits, exact, kinds;
+    };
+    const Row rows[] = {
+        { "heartbeat",        10, 20, 9, 21, 9, 7, 5 },
+        { "sys_status",       10, 12, 9, 11, 9, 7, 6 },
+        { "attitude",         10, 12, 9, 11, 9, 7, 6 },
+        { "protocol_version", 10, 12, 9, 11, 9, 7, 6 },
+    };
+    const bw::Model truth = d.model();
+    const bw::Model found = a.model();
+    std::size_t     checked = 0;
+    for (std::size_t ft = 0; ft < a.type_count(); ++ft) {
+        for (std::size_t tt = 0; tt < truth.message_type_count(); ++tt) {
+            if (found.field(ft, 7).kind != FieldKind::Constant ||
+                (truth.field(tt, 7).constant & 0xFF) != found.field(ft, 7).constant) {
+                continue;
+            }
+            CAPTURE(truth.message_type_name(tt));
+            const bw::FieldScore s = bw::score_fields(truth, tt, found, ft);
+            for (std::size_t r = 0; r < sizeof(rows) / sizeof(rows[0]); ++r) {
+                if (truth.message_type_name(tt) == rows[r].message) {
+                    ++checked;
+                    CHECK(s.truth_fields == rows[r].truth_fields);
+                    CHECK(s.found_fields == rows[r].found_fields);
+                    CHECK(s.truth_boundaries == rows[r].truth_boundaries);
+                    CHECK(s.found_boundaries == rows[r].found_boundaries);
+                    CHECK(s.boundary_hits == rows[r].hits);
+                    CHECK(s.exact_fields == rows[r].exact);
+                    CHECK(s.kind_hits == rows[r].kinds);
+                    CHECK(s.found_has_checksum);
+                }
+            }
+        }
+    }
+    CHECK(checked == 4);
 }

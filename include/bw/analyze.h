@@ -18,10 +18,13 @@
 // undone, which is what a checksum is taken over and what a field is of. A size
 // is the size of that.
 //
-// Message types are, for now, frame sizes, named type0, type1... in order of
+// A message type is a frame size, or, when the frames of one kind of message have
+// several (bw/messages.h: a length field says the size, and a discriminator ties
+// them together), all of those sizes. They are named type0, type1... in order of
 // how many frames each has (most first, the smaller size first on a tie). The
 // fields of a type are named field_N after the byte offset N they start at, and
-// the checksum is "checksum".
+// the checksum is "checksum"; in a type of several sizes the length is "length"
+// and what it counts is "payload", which comes before the checksum.
 //
 // The shape of this API follows the rule in docs/roadmap.md: plain structs,
 // the collections behind a class.
@@ -49,9 +52,12 @@ struct AnalyzeOptions {
 
 // What stage 2 saw in the frames of one message type.
 struct MessageTypeReport {
-    std::uint32_t   frame_bytes = 0;
+    std::uint32_t   frame_bytes = 0;       // the size, or the smallest of the sizes
     std::uint32_t   frames      = 0;
     ChecksumFinding checksum;
+    // The largest of the sizes of a type that has several; 0, or the same as
+    // frame_bytes, when it has one.
+    std::uint32_t   largest_frame_bytes = 0;
 };
 
 struct AnalysisInfo {
