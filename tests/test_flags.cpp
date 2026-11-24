@@ -658,3 +658,225 @@ TEST_CASE("flags: frames given with a kind of flags are described as such, and w
     CHECK(bw::analyze_frames(d.capture(), bw::Segmentation(given, d.frames()), bw::AnalyzeOptions()).model().framing().kind ==
           bw::FramingKind::IdleGap);
 }
+
+namespace {
+
+// A frame in the shape that makes a byte that comes in pairs look like a flag: a marker, some bytes that are not
+// zero (their number is the frame's number, so the zeros are not in the same place of every frame), two zeros, a
+// constant that follows them (a zero-high number, in whatever came next), and the same again.
+Bytes zero_pairs_frame(std::size_t i) {
+    Bytes f;
+    f.push_back(0x10);
+    for (std::size_t k = 0; k < 1 + i % 6; ++k) {
+        f.push_back(static_cast<std::uint8_t>(0x20 + (i * 7 + k * 3) % 0x60));
+    }
+    for (int pair = 0; pair < 2; ++pair) {
+        f.push_back(0x00);
+        f.push_back(0x00);
+        f.push_back(0x55);
+        for (std::size_t k = 0; k < (pair == 0 ? 5 - i % 6 : 1); ++k) {
+            f.push_back(static_cast<std::uint8_t>(0x21 + (i * 5 + k * 11 + pair) % 0x60));
+        }
+    }
+    return f;                                               // always 14 bytes: the zeros move, the size does not
+}
+
+} // namespace
+
+TEST_CASE("flags: of two bytes that bound frames, the one whose frames are the same size is the flag") {
+    // 0xC0 bounds 60 frames of 14 bytes. 0x00, which comes in pairs inside them, bounds twice as many (from a zero to
+    // the next), of sizes that depend on where the zeros are: more of them do not make it the flag.
+    std::vector<Bytes> contents;
+    for (std::size_t i = 0; i < 60; ++i) {
+        contents.push_back(zero_pairs_frame(i));
+    }
+    const Built b = build(contents, std::vector<bool>(contents.size(), true));
+    const Segmentation s = by_flags(b.bytes);
+    REQUIRE(s.info().found);
+    CHECK(s.info().delimiter == 0xC0);
+    CHECK(s.info().flags == 120);
+    CHECK(same_frames(s, b.frames));
+    // It does bound more frames than the flag does, and they pass for frames.
+    CHECK(bw::segment_by_flags(capture_of(b.bytes), SegmentationOptions()).frame_count() == 60);
+}
+
+TEST_CASE("segmentation: gaps that the frames of a byte in pairs do not cut at are the frames") {
+    // The same frames, with a silence between them, and no flag: the zeros of the frames are not where they end.
+    Bytes                  bytes;
+    std::vector<FrameSpan> expected;
+    for (std::size_t i = 0; i < 60; ++i) {
+        expected.push_back(span(bytes.size(), 14));
+        const Bytes f = zero_pairs_frame(i);
+        bytes.insert(bytes.end(), f.begin(), f.end());
+    }
+    Capture c;
+    for (std::size_t i = 0; i < bytes.size(); ++i) {
+        EventInfo info;
+        info.has_time = true;
+        info.time_ns  = static_cast<std::int64_t>(1000 * i + 20000 * (i / 14));      // 1000 ns apart, and 20000 more between frames
+        c.add_event(info, Bytes(1, bytes[i]));
+    }
+    // The zeros alone pass for a flag.
+    const Segmentation flagged = bw::segment_by_flags(c, SegmentationOptions());
+    REQUIRE(flagged.info().found);
+    CHECK(flagged.info().delimiter == 0x00);
+    // ...and are not taken for the framing: the gaps are, and cut exactly the frames.
+    const Segmentation s = bw::segment_frames(c, SegmentationOptions());
+    REQUIRE(s.info().found);
+    CHECK(s.info().kind == bw::FramingKind::IdleGap);
+    CHECK(same_frames(s, expected));
+}
+
+TEST_CASE("segmentation: a length that sizes a chain of frames is the framing, and the sync byte twice is not a flag") {
+    // [A7 A7 length type payload]: two sizes, as many frames of each, with nothing between them. A7 comes in pairs, at
+    // the start of every frame, and bounds frames of its own, from one A7 to the next, which are the same bytes
+    // a place late; the length at offset 2 of the first A7 says where each frame ends, and is the framing.
+    Bytes                  bytes;
+    std::vector<FrameSpan> expected;
+    for (std::size_t i = 0; i < 60; ++i) {
+        const std::size_t payload = i % 2 == 0 ? 4 : 9;
+        Bytes             f;
+        f.push_back(0xA7);
+        f.push_back(0xA7);
+        f.push_back(static_cast<std::uint8_t>(payload));                                // size less 4
+        f.push_back(static_cast<std::uint8_t>(0x30 + payload));
+        for (std::size_t k = 0; k < payload; ++k) {
+            f.push_back(static_cast<std::uint8_t>(0x40 + (i * 13 + k * 5) % 0x30));
+        }
+        expected.push_back(span(bytes.size(), f.size()));
+        bytes.insert(bytes.end(), f.begin(), f.end());
+    }
+    const Segmentation flagged = bw::segment_by_flags(capture_of(bytes), SegmentationOptions());
+    REQUIRE(flagged.info().found);                                                      // it is taken for one by itself
+    CHECK(flagged.info().delimiter == 0xA7);
+    const Segmentation s = bw::segment_frames(capture_of(bytes), SegmentationOptions());
+    REQUIRE(s.info().found);
+    CHECK(s.info().kind == bw::FramingKind::Contiguous);
+    CHECK(s.info().sync == 0xA7);
+    CHECK(s.info().length_bytes == 1);
+    CHECK(same_frames(s, expected));
+}
+
+TEST_CASE("segmentation: a length that fits two sizes is the framing when each is a tenth of the frames, and not under") {
+    // Flags that nothing escapes, between frames of 14 bytes and some of 15 (a byte stuffed in the capture, which the
+    // stuffing shows nowhere else): a byte that is 0x40 in the frames of 14 and 0x41 in the longer is a length that
+    // fits, in a chain with no breaks. With one frame in ten that is long, the sizes are two; with fewer, it is the
+    // size of a few frames, and is not told from a byte of data: the flags are the framing.
+    struct Case { std::size_t frames, longer; bool chain; };
+    const Case cases[5] = { { 100, 10, true }, { 99, 9, false }, { 60, 6, true }, { 60, 5, false }, { 60, 1, false } };
+    for (int c = 0; c < 5; ++c) {
+        std::vector<Bytes> contents;
+        for (std::size_t i = 0; i < cases[c].frames; ++i) {
+            Bytes f = zero_pairs_frame(i);                  // 14 bytes: the marker 0x10 first, and the rest
+            f[0] = 0x10;
+            f[1] = 0x40;
+            if (i % (cases[c].frames / cases[c].longer) == 3) {
+                f[1] = 0x41;
+                f.push_back(0x77);
+            }
+            contents.push_back(f);
+        }
+        const Built b = build(contents, std::vector<bool>(contents.size(), true));
+        const Capture capture = capture_of(b.bytes);
+        CAPTURE(cases[c].frames);
+        CAPTURE(cases[c].longer);
+        const Segmentation sync = bw::segment_by_sync(capture, SegmentationOptions());
+        REQUIRE(sync.info().found);                         // the chain is there, and says it has a length
+        CHECK(sync.info().length_bytes == 1);
+        CHECK(sync.info().breaks == 0);
+        const Segmentation s = bw::segment_frames(capture, SegmentationOptions());
+        REQUIRE(s.info().found);
+        CHECK(s.info().kind == (cases[c].chain ? bw::FramingKind::Contiguous : bw::FramingKind::Flagged));
+    }
+}
+
+TEST_CASE("segmentation: flags that the stuffing shows are the framing, whatever the gaps say") {
+    // SLIP frames of 12 bytes with an END and an ESC in some of them, so that both codes are in the capture, and a
+    // pause of a thousand characters in the middle of one frame in three: the gaps cut frames that are not the flags'.
+    const std::uint8_t END = 0xC0, ESC = 0xDB;
+    Bytes                  bytes;
+    std::vector<FrameSpan> expected;
+    std::vector<std::size_t> pauses;
+    for (std::size_t i = 0; i < 45; ++i) {
+        Bytes content;
+        content.push_back(0x21);
+        for (std::size_t k = 0; k < 11; ++k) {
+            content.push_back(static_cast<std::uint8_t>(0x30 + (i * 3 + k * 7) % 0x40));
+        }
+        if (i % 4 == 1) {
+            content[3 + i % 5] = END;
+        }
+        if (i % 4 == 3) {
+            content[4 + i % 5] = ESC;
+        }
+        Bytes frame(1, END);
+        for (std::size_t k = 0; k < content.size(); ++k) {
+            if (content[k] == END) {
+                frame.push_back(ESC);
+                frame.push_back(0xDC);
+            } else if (content[k] == ESC) {
+                frame.push_back(ESC);
+                frame.push_back(0xDD);
+            } else {
+                frame.push_back(content[k]);
+            }
+        }
+        frame.push_back(END);
+        if (i % 3 == 0) {
+            pauses.push_back(bytes.size() + 6);              // the pause is before the byte at this place
+        }
+        expected.push_back(span(bytes.size(), frame.size()));
+        bytes.insert(bytes.end(), frame.begin(), frame.end());
+    }
+    Capture capture;
+    std::int64_t now = 0;
+    std::size_t  next_pause = 0;
+    for (std::size_t i = 0; i < bytes.size(); ++i) {
+        if (next_pause < pauses.size() && pauses[next_pause] == i) {
+            now += 1000000;
+            ++next_pause;
+        }
+        EventInfo info;
+        info.has_time = true;
+        info.time_ns  = now;
+        capture.add_event(info, Bytes(1, bytes[i]));
+        now += 1000;
+    }
+    const Segmentation gaps = bw::segment_by_gaps(capture, SegmentationOptions());
+    REQUIRE(gaps.info().found);                              // they say there are frames, and not these
+    const Segmentation s = bw::segment_frames(capture, SegmentationOptions());
+    REQUIRE(s.info().found);
+    CHECK(s.info().kind == bw::FramingKind::Flagged);
+    CHECK(s.info().escaped);
+    CHECK(same_frames(s, expected));
+}
+
+TEST_CASE("segmentation: a length that fits the two sizes of two kinds of frame, with a frame longer than its kind says, is not the framing") {
+    // Flags that nothing escapes, between frames of 14 and 15 bytes in the same number: a byte that is 0x40 in the first and
+    // 0x41 in the second is a length that fits both, and it is the id. A frame of the first kind that was a byte longer
+    // (stuffed, in the capture, once) breaks the chain, as it breaks any length that is the id: the flags are the framing.
+    std::vector<Bytes> contents;
+    for (std::size_t i = 0; i < 60; ++i) {
+        Bytes f = zero_pairs_frame(i);
+        f[0] = 0x10;
+        f[1] = 0x40;
+        if (i % 2 == 1) {
+            f[1] = 0x41;
+            f.push_back(0x66);
+        }
+        if (i == 30) {
+            f.push_back(0x77);
+        }
+        contents.push_back(f);
+    }
+    const Built b = build(contents, std::vector<bool>(contents.size(), true));
+    const Capture capture = capture_of(b.bytes);
+    const Segmentation sync = bw::segment_by_sync(capture, SegmentationOptions());
+    REQUIRE(sync.info().found);                             // the chain is there, with a length, and a break
+    CHECK(sync.info().length_bytes == 1);
+    CHECK(sync.info().breaks == 1);
+    const Segmentation s = bw::segment_frames(capture, SegmentationOptions());
+    REQUIRE(s.info().found);
+    CHECK(s.info().kind == bw::FramingKind::Flagged);
+    CHECK(same_frames(s, b.frames));
+}

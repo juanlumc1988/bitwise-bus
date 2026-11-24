@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 
+#include "bw/analyze.h"
 #include "bw/catalog.h"
 #include "bw/checksum.h"
 #include "bw/protocol.h"
@@ -160,14 +161,23 @@ TEST_CASE("checksum stage: it answers only on enough evidence, and says how many
     }
 }
 
-TEST_CASE("checksum stage: a bad checksum in one frame, or none at all, is not found") {
+TEST_CASE("checksum stage: a bad checksum in one frame is the line's, and none at all is not found") {
+    // One wrong CRC byte in 20 frames (a tenth of 20 is 2): the checksum is found, and one frame is said not to agree.
+    // In 9, which is not enough for any to be wrong, it is not.
     fixtures::Random rng(15);
     std::vector<Bytes> frames = many(&rng, 20, 6);
-    frames[7][7] = static_cast<std::uint8_t>(frames[7][7] ^ 0x01);          // one wrong CRC byte
+    frames[7][7] = static_cast<std::uint8_t>(frames[7][7] ^ 0x01);
     const Capture bad = fixtures::capture_of(frames);
     const ChecksumFinding f = bw::find_checksum(bad, cut(bad), 8);
-    CHECK_FALSE(f.found);
-    CHECK(f.candidates == 0);
+    REQUIRE(f.found);
+    CHECK(f.unexplained_frames == 1);
+    CHECK(f.evidence_bits == 19 * 16);
+    std::vector<Bytes> few = many(&rng, 9, 6);
+    few[3][7] = static_cast<std::uint8_t>(few[3][7] ^ 0x01);
+    const Capture bad_few = fixtures::capture_of(few);
+    const ChecksumFinding h = bw::find_checksum(bad_few, cut(bad_few), 8);
+    CHECK_FALSE(h.found);
+    CHECK(h.candidates == 0);
 
     std::vector<Bytes> noise;
     for (int i = 0; i < 20; ++i) {
@@ -241,7 +251,8 @@ TEST_CASE("checksum stage: when too much matches it keeps no answer and says it 
     const ChecksumFinding f = bw::find_checksum(c, cut(c), 8);
     CHECK_FALSE(f.found);
     CHECK(f.truncated);
-    CHECK(f.candidates == 64);                 // as many as the search keeps
+    CHECK(f.candidates > 32);                  // what the search keeps, less the ones that are a part of another
+    CHECK(f.candidates <= 64);
     CHECK(f.distinct_frames == 1);
 }
 
@@ -431,14 +442,53 @@ TEST_CASE("checksum stage: what has a checksum as it is, is not said to have a h
     CHECK(with_crc.seed == 0);
     CHECK(with_crc.evidence_bits == 20 * 16);
 
-    // Frames of a CRC with a byte of its own, one frame wrong: it is nothing, and the byte does not make it so.
+    // Frames of a CRC with a byte of its own, one frame in 20 wrong: found all the same, the byte too, and it
+    // says that it does not explain one. The evidence is that of the 19 it does: 16 bits each, less the byte.
     std::vector<Bytes> frames = mavlink_like(&rng, 20, 14, 50);
     frames[9][5] = static_cast<std::uint8_t>(frames[9][5] ^ 1);
     const Capture bad = fixtures::capture_of(frames);
     const ChecksumFinding f = bw::find_checksum(bad, cut(bad), static_cast<std::uint32_t>(frames[0].size()));
-    CHECK_FALSE(f.found);
-    CHECK(f.candidates == 0);
-    CHECK(f.evidence_bits == 0);
+    REQUIRE(f.found);
+    CHECK(f.seeded);
+    CHECK(f.seed == 50);
+    CHECK(f.unexplained_frames == 1);
+    CHECK(f.evidence_bits == 19 * 16 - 8);
+}
+
+TEST_CASE("checksum stage: a tenth of the frames may be wrong, and no more, and not with fewer than twelve different") {
+    // A CRC-16 frame in 30, with n of them changed in a byte of what the CRC covers.
+    const auto frames_with = [](std::size_t count, std::size_t wrong) {
+        fixtures::Random   rng(46);
+        std::vector<Bytes> frames = many(&rng, count, 6);
+        for (std::size_t i = 0; i < wrong; ++i) {
+            frames[2 + i * 3][1] = static_cast<std::uint8_t>(frames[2 + i * 3][1] ^ 0x40);
+        }
+        return frames;
+    };
+    const auto find = [](const std::vector<Bytes>& frames) {
+        const Capture c = fixtures::capture_of(frames);
+        return bw::find_checksum(c, cut(c), static_cast<std::uint32_t>(frames[0].size()));
+    };
+    // 30 frames: three may be wrong (a tenth), four may not.
+    for (std::size_t wrong = 0; wrong <= 4; ++wrong) {
+        const ChecksumFinding f = find(frames_with(30, wrong));
+        CAPTURE(wrong);
+        CHECK(f.found == (wrong <= 3));
+        if (f.found) {
+            CHECK(f.unexplained_frames == wrong);
+            CHECK(bw::checksum_algorithm_name(f.algorithm) == "CRC-16/MODBUS");
+            CHECK(f.evidence_bits == (30 - wrong) * 16);
+        }
+    }
+    // A tenth of 20 is two: two wrong, found, and three, not; and of 9, which is less than ten, none.
+    CHECK(find(frames_with(20, 2)).found);
+    CHECK_FALSE(find(frames_with(20, 3)).found);
+    CHECK_FALSE(find(frames_with(9, 1)).found);
+    // Twelve different frames is the least for the others to say what it is: eleven, with a tenth, are 1, and one wrong
+    // is more than none; but it is the wrong one that is in the way, and with 11 there is no group of eight that is sure
+    // to have none of them, so there is no search.
+    CHECK(find(frames_with(12, 1)).found);
+    CHECK_FALSE(find(frames_with(11, 1)).found);
 }
 
 TEST_CASE("checksum stage: random frames are not given a checksum, with the hidden byte in the search") {
@@ -463,4 +513,96 @@ TEST_CASE("checksum stage: random frames are not given a checksum, with the hidd
         CHECK_FALSE(f.found);
         CHECK(f.candidates == 0);
     }
+}
+
+namespace {
+
+std::uint8_t crc8(const Bytes& data, std::size_t from, std::size_t to) {
+    std::uint8_t crc = 0;
+    for (std::size_t i = from; i < to; ++i) {
+        crc = static_cast<std::uint8_t>(crc ^ data[i]);
+        for (int bit = 0; bit < 8; ++bit) {
+            crc = (crc & 0x80u) ? static_cast<std::uint8_t>((crc << 1) ^ 0x07u) : static_cast<std::uint8_t>(crc << 1);
+        }
+    }
+    return crc;
+}
+
+} // namespace
+
+TEST_CASE("checksum stage: what a candidate covers counts once for each different thing, and what hardly changes is no rival") {
+    // [id][low][middle][0][0][flag][CRC-8 of all of them]: one byte of zero is covered by a CRC-8 that starts from zero
+    // and has no final xor, and the zero byte after it is what it comes to, in every frame, whatever the algorithm
+    // (and so for XOR and the sum). Those explain every frame and are worth 8 bits, the one thing they cover,
+    // against the 20 different frames that the real one is worth 8 bits each for.
+    fixtures::Random   rng(61);
+    std::vector<Bytes> frames;
+    for (int i = 0; i < 20; ++i) {
+        Bytes f;
+        f.push_back(0xA5);
+        f.push_back(rng.byte());
+        f.push_back(rng.byte());
+        f.push_back(0);
+        f.push_back(0);
+        f.push_back(static_cast<std::uint8_t>(rng.byte() & 3));
+        f.push_back(crc8(f, 0, f.size()));
+        frames.push_back(f);
+    }
+    const Capture c = fixtures::capture_of(frames);
+    const ChecksumFinding f = bw::find_checksum(c, cut(c), 7);
+    CHECK(f.candidates > 1);                                // the rivals are there, and are not found
+    REQUIRE(f.found);
+    CHECK(bw::checksum_algorithm_name(f.algorithm) == "CRC-8");
+    CHECK(f.header_skip == 0);
+    CHECK(f.trailer_skip == 0);
+    CHECK(f.evidence_bits == 20 * 8);
+}
+
+TEST_CASE("checksum stage: a hidden byte is looked for when what explains the frames has no evidence of its own") {
+    // [id][low][middle][flag][0][0][0][CRC-16/MCRF4XX with a byte of its own]: the zeros explain themselves, as above,
+    // and with nothing else that explains the frames as they are, the search for the byte is made all the same. Eight
+    // frames, so that it is this search that finds it, and not the one that allows a few of the frames to be wrong.
+    fixtures::Random   rng(62);
+    std::vector<Bytes> frames;
+    for (int i = 0; i < 8; ++i) {
+        Bytes f;
+        f.push_back(0xA5);
+        f.push_back(rng.byte());
+        f.push_back(rng.byte());
+        f.push_back(static_cast<std::uint8_t>(rng.byte() & 3));
+        f.push_back(0);
+        f.push_back(0);
+        f.push_back(0);
+        const std::uint16_t crc = mcrf4xx(f, 0, f.size(), 77);
+        f.push_back(static_cast<std::uint8_t>(crc & 0xFF));
+        f.push_back(static_cast<std::uint8_t>(crc >> 8));
+        frames.push_back(f);
+    }
+    const Capture c = fixtures::capture_of(frames);
+    const ChecksumFinding f = bw::find_checksum(c, cut(c), 9);
+    REQUIRE(f.found);
+    CHECK(f.seeded);
+    CHECK(f.seed == 77);
+    CHECK(bw::checksum_algorithm_name(f.algorithm) == "CRC-16/MCRF4XX");
+    CHECK(f.header_skip == 0);
+}
+
+TEST_CASE("checksum stage: the frames that a checksum does not explain are said, in the report") {
+    fixtures::Random   rng(63);
+    std::vector<Bytes> frames = many(&rng, 30, 6);
+    frames[4][1]  = static_cast<std::uint8_t>(frames[4][1] ^ 0x08);
+    const Capture      one = fixtures::capture_of(frames);
+    const bw::Analysis a   = bw::analyze(one, bw::AnalyzeOptions());
+    const std::string  text = bw::describe_analysis(a);
+    CHECK(text.find("checksum CRC-16/MODBUS, 16 bits little-endian, evidence 464 bits, 1 frame does not agree\n") !=
+          std::string::npos);
+    frames[9][3]  = static_cast<std::uint8_t>(frames[9][3] ^ 0x08);
+    frames[17][2] = static_cast<std::uint8_t>(frames[17][2] ^ 0x08);
+    const Capture      three = fixtures::capture_of(frames);
+    CHECK(bw::describe_analysis(bw::analyze(three, bw::AnalyzeOptions())).find("evidence 432 bits, 3 frames do not agree\n") !=
+          std::string::npos);
+    // None wrong: nothing is said.
+    const Capture clean = fixtures::capture_of(many(&rng, 30, 6));
+    CHECK(bw::describe_analysis(bw::analyze(clean, bw::AnalyzeOptions())).find("do not agree") == std::string::npos);
+    CHECK(bw::describe_analysis(bw::analyze(clean, bw::AnalyzeOptions())).find("does not agree") == std::string::npos);
 }

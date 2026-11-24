@@ -22,6 +22,7 @@
 #include "bw/kaitai.h"
 #include "bw/crc_search.h"
 #include "bw/protocol.h"
+#include "bw/synthetic.h"
 
 namespace {
 
@@ -35,6 +36,7 @@ int usage() {
         "  bitwise capture-info FILE\n"
         "  bitwise protocols [NAME]\n"
         "  bitwise synth NAME [--seed N] [--frames N] [--jitter-permille N]\n"
+        "                     [--corrupt-permille N] [--lose-permille N]\n"
         "  bitwise analyze FILE [--min-gap-ratio N] [--min-frames N]\n"
         "  bitwise export FILE [--format kaitai] [--type N] [--id NAME] [--min-gap-ratio N] [--min-frames N]\n"
         "\n"
@@ -190,11 +192,13 @@ int cmd_protocols(const std::vector<std::string>& args) {
 int cmd_synth(const std::vector<std::string>& args) {
     std::string       name;
     bw::GenerateOptions options;
+    bw::NoiseOptions    noise;
     for (std::size_t i = 0; i < args.size(); ++i) {
         const std::string&  arg       = args[i];
         const bool          has_value = (i + 1 < args.size());
         std::uint64_t       number    = 0;
-        if ((arg == "--seed" || arg == "--frames" || arg == "--jitter-permille") && !has_value) {
+        if ((arg == "--seed" || arg == "--frames" || arg == "--jitter-permille" || arg == "--corrupt-permille" ||
+             arg == "--lose-permille") && !has_value) {
             std::fprintf(stderr, "bitwise: %s needs a value\n", arg.c_str());
             return 2;
         }
@@ -218,6 +222,14 @@ int cmd_synth(const std::vector<std::string>& args) {
                 return 2;
             }
             options.jitter_permille = static_cast<std::uint32_t>(number);
+        } else if ((arg == "--corrupt-permille" || arg == "--lose-permille") && has_value) {
+            if (!parse_unsigned(args[++i], 1000, &number)) {
+                std::fprintf(stderr, "bitwise: %s: '%s' is not a whole number from 0 to 1000\n", arg.c_str(),
+                             args[i].c_str());
+                return 2;
+            }
+            (arg == "--corrupt-permille" ? noise.corrupt_permille : noise.lose_permille) =
+                static_cast<std::uint32_t>(number);
         } else if (!arg.empty() && arg[0] == '-') {
             std::fprintf(stderr, "bitwise: unknown option '%s'\n", arg.c_str());
             return 2;
@@ -233,7 +245,17 @@ int cmd_synth(const std::vector<std::string>& args) {
         return 2;
     }
     try {
-        const std::string text = bw::format_capture_csv(bw::generate_protocol(name, options).capture());
+        // `random` is not a protocol of the registry but one made up from the seed (bw/synthetic.h).
+        bw::SyntheticOptions made_up;
+        made_up.seed            = options.seed;
+        made_up.frames          = options.frames;
+        made_up.jitter_permille = options.jitter_permille;
+        bw::Dataset dataset = name == "random" ? bw::generate_synthetic(made_up) : bw::generate_protocol(name, options);
+        noise.seed          = options.seed;
+        if (noise.corrupt_permille != 0 || noise.lose_permille != 0) {
+            dataset = bw::add_noise(dataset, noise);
+        }
+        const std::string text = bw::format_capture_csv(dataset.capture());
         std::fwrite(text.data(), 1, text.size(), stdout);
         return 0;
     } catch (const std::invalid_argument& e) {

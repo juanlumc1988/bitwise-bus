@@ -46,6 +46,13 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
+      # Protocols made up from a seed, 800 of them, with the line as it is and with
+      # one frame in twenty wrong or lost: the property the unit tests try on a few,
+      # on a sweep. It prints what it measured.
+      - name: Sweep of synthetic protocols, with and without noise on the line
+        if: matrix.compiler == 'gcc' && matrix.build_type == 'RelWithDebInfo'
+        run: BW_SWEEP_SEEDS=800 ./build/bw_tests --force-colors=off -tc="synthetic sweep*"
+
       # The generators of the synthetic protocols, against a second implementation
       # of each, in Python, on 336 combinations of seed, size and timing noise.
       - name: Generators agree with their independent implementation

@@ -53,6 +53,7 @@ add_library(bw_core STATIC
     src/evaluate.cpp
     src/dataset.cpp
     src/protocol.cpp
+    src/synthetic.cpp
     src/protocols/modbus_rtu.cpp
     src/protocols/ubx.cpp
     src/protocols/mavlink1.cpp
@@ -154,7 +155,8 @@ if(BW_BUILD_TESTS)
         tests/test_lines.cpp
         tests/test_unstuff.cpp
         tests/test_sums.cpp
-        tests/test_messages.cpp)
+        tests/test_messages.cpp
+        tests/test_synthetic.cpp)
     target_include_directories(bw_tests PRIVATE tests/third_party)
     target_compile_definitions(bw_tests PRIVATE
         "BW_CORPUS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus\""
@@ -225,6 +227,15 @@ if(BW_BUILD_TESTS)
     add_test(NAME cli_synth_bad_number COMMAND bitwise synth modbus-rtu --frames 100001)
     set_tests_properties(cli_synth_bad_number PROPERTIES PASS_REGULAR_EXPRESSION
         "--frames: '100001' is not a whole number from 0 to 100000")
+    add_test(NAME cli_synth_random COMMAND bitwise synth random --seed 1 --frames 3)
+    set_tests_properties(cli_synth_random PROPERTIES PASS_REGULAR_EXPRESSION
+        "# bitwise-capture 1.*time_ns,channel,direction,id,data.*0,line,,,[0-9a-f][0-9a-f]")
+    add_test(NAME cli_synth_noise_rate COMMAND bitwise synth random --frames 3 --lose-permille 1001)
+    set_tests_properties(cli_synth_noise_rate PROPERTIES PASS_REGULAR_EXPRESSION
+        "--lose-permille: '1001' is not a whole number from 0 to 1000")
+    add_test(NAME cli_synth_noise_missing_value COMMAND bitwise synth random --corrupt-permille)
+    set_tests_properties(cli_synth_noise_missing_value PROPERTIES PASS_REGULAR_EXPRESSION
+        "--corrupt-permille needs a value")
     add_test(NAME cli_synth_missing_value COMMAND bitwise synth modbus-rtu --frames)
     set_tests_properties(cli_synth_missing_value PROPERTIES PASS_REGULAR_EXPRESSION
         "--frames needs a value")

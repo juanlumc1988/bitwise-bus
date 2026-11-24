@@ -256,7 +256,10 @@ std::string checksum_line(const ChecksumFinding& c) {
                               (c.byte_order == ByteOrder::Big ? " big-endian"
                                : c.byte_order == ByteOrder::Little ? " little-endian" : "");
         return "checksum " + checksum_name(c) + ", " + form +
-               ", evidence " + number(c.evidence_bits) + " bits";
+               ", evidence " + number(c.evidence_bits) + " bits" +
+               (c.unexplained_frames == 0 ? ""
+                : c.unexplained_frames == 1 ? ", 1 frame does not agree"
+                : ", " + number(c.unexplained_frames) + " frames do not agree");
     }
     if (c.candidates == 0) {
         return "no checksum found";

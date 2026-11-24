@@ -101,6 +101,12 @@ struct SearchOptions {
     bool hidden_byte = false;
 
     std::size_t max_candidates = 64;
+
+    // A place where the bytes that a checksum would cover are not different enough in the frames to be worth this
+    // many bits (candidate_evidence, with the distinct things covered for the distinct frames) is not tried: nothing
+    // that explains the frames there could be an answer, and with a hidden byte, which makes any byte at all
+    // explain what never changes, they would fill the list. Zero tries them all.
+    u32 min_evidence_bits = 0;
 };
 
 struct SearchReport {
@@ -153,6 +159,16 @@ std::vector<u8> hidden_bytes(const std::vector<Frame>& frames, const Layout& lay
 // What a candidate is worth, in bits: the checksum's width for each distinct
 // frame it explains, and 8 less if the search chose a hidden byte to make it.
 u32 candidate_evidence(const Candidate& candidate, std::size_t distinct_frames);
+
+// Is every byte from `from` up to `to` (not included) zero in every frame? Zeros
+// change nothing in a sum, nor in a CRC that starts from zero, so a checksum that
+// starts covering after them is the same finding as one that starts before: the
+// frames cannot say whether they are covered. The search keeps the one that covers them.
+bool zero_bytes(const std::vector<Frame>& frames, std::size_t from, std::size_t to);
+
+// How many different byte strings the frames have between `first` and `after` bytes before their end.
+// What a checksum is tested with is what it covers: where every frame has the same, it is tested once.
+std::size_t distinct_covered(const std::vector<Frame>& frames, std::size_t first, std::size_t after);
 
 SearchReport search(const std::vector<Frame>& frames,
                     const SearchOptions& options = SearchOptions());
