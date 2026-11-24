@@ -310,7 +310,8 @@ TEST_CASE("lines: the pipeline cuts text into lines, where there are gaps too, a
     CHECK(bw::describe_analysis(a).find("framing    lines: each frame ends with the byte 0x0A (90 of them in the capture)\n") != std::string::npos);
     CHECK(bw::describe_model(a.model()).find("framing: ends with 0xA\n") != std::string::npos);
 
-    // What the stages make of the sentences found is what they make of the true ones.
+    // What the stages make of the sentences found is what they make of the true ones: the three kinds of sentence,
+    // and not the many sizes that the widths of the fields give them.
     bw::SegmentationInfo info;
     info.found = true;
     const bw::Analysis given = bw::analyze_frames(d.capture(), bw::Segmentation(info, d.frames()), bw::AnalyzeOptions());
@@ -319,10 +320,61 @@ TEST_CASE("lines: the pipeline cuts text into lines, where there are gaps too, a
     REQUIRE(given_model.find("message type 0") != std::string::npos);
     CHECK(found_model.substr(found_model.find("message type 0")) == given_model.substr(given_model.find("message type 0")));
     CHECK(a.type_count() == given.type_count());
+    CHECK(a.type_count() == 3);
 
-    // Binary frames keep what they had: a sync byte before lines, which are not looked for if one is found.
+    // Binary frames keep what they had: a sync byte and a length, when the capture is not text.
     CHECK(bw::segment_frames(make("ubx", 1, 90).capture(), SegmentationOptions()).info().kind == bw::FramingKind::Contiguous);
     CHECK(bw::segment_frames(make("modbus-rtu", 1, 50, 300).capture(), SegmentationOptions()).info().kind == bw::FramingKind::IdleGap);
+}
+
+namespace {
+
+// The capture of `d` with the line feed that ends each of the given frames changed to a space.
+Capture with_wrong_feeds(const Dataset& d, const std::vector<std::size_t>& frames) {
+    std::vector<std::uint64_t> at;
+    for (std::size_t i = 0; i < frames.size(); ++i) {
+        at.push_back(d.frame(frames[i]).first_event + d.frame(frames[i]).event_count - 1);
+    }
+    const Capture original = d.capture();
+    Capture       out;
+    for (std::uint32_t c = 1; c < original.channel_count(); ++c) {
+        out.add_channel(original.channel_name(c));
+    }
+    for (std::size_t i = 0; i < original.event_count(); ++i) {
+        bool wrong = false;
+        for (std::size_t k = 0; k < at.size(); ++k) {
+            wrong = wrong || at[k] == i;
+        }
+        out.add_event(original.event(i), wrong ? Bytes(1, 0x20) : original.event_bytes(i));
+    }
+    return out;
+}
+
+} // namespace
+
+TEST_CASE("lines: line feeds that arrive wrong do not make the gaps the better evidence, until they are a tenth of the cuts") {
+    // 93 sentences, three to the second: 31 bursts, and 60 places inside the capture where the gaps cut. A line feed that is
+    // wrong at the end of a burst joins the sentence to the next, and loses two of them (where it ends and where the next starts).
+    const Dataset d = make("nmea0183", 3, 93);
+    std::vector<std::size_t> ends;
+    for (std::size_t f = 5; ends.size() < 4; f += 3) {
+        ends.push_back(f);
+    }
+    for (std::size_t wrong = 0; wrong <= 4; ++wrong) {
+        const Capture noisy = with_wrong_feeds(d, std::vector<std::size_t>(ends.begin(), ends.begin() + static_cast<std::ptrdiff_t>(wrong)));
+        const Segmentation chosen = bw::segment_frames(noisy, SegmentationOptions());
+        INFO("wrong " << wrong);
+        REQUIRE(chosen.info().found);
+        if (wrong <= 3) {
+            // Up to six of the sixty places: a tenth, which is allowed.
+            CHECK(chosen.info().kind == bw::FramingKind::Terminated);
+            CHECK(chosen.frame_count() == 93 - wrong);
+        } else {
+            // Eight of them are not: the silences, which cut the bursts, are what is believed.
+            CHECK(chosen.info().kind != bw::FramingKind::Terminated);
+            CHECK(chosen.frame_count() == 31);
+        }
+    }
 }
 
 TEST_CASE("lines: frames given as lines are described as such") {

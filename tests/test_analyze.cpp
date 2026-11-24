@@ -272,7 +272,7 @@ TEST_CASE("analyze: a size with too few frames is left out and counted, at the e
     CHECK(a.type_count() == 1);
     CHECK(a.info().frames == 33);
     CHECK(a.info().ignored_frames == 3);
-    CHECK(contains(bw::describe_analysis(a), "frames     33 (3 of a size too rare to say anything about)"));
+    CHECK(contains(bw::describe_analysis(a), "frames     33 (3 of a size or kind too rare to say anything about)"));
 
     // Four of them are enough...
     frames.push_back(few[0]);

@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "bw/messages.h"
+#include "bw/text.h"
 
 namespace bw {
 
@@ -240,6 +241,64 @@ void add_kind_fields(Model* model, std::size_t type, const KindType& kind) {
     model->add_field(type, "checksum", checksum, checksum_name(kind.checksum));
 }
 
+// The fields of a kind of lines of text (bw/text.h) as the model has them. The names say which of them it is, since where it
+// starts depends on the line.
+void add_text_fields(Model* model, std::size_t type, const TextType& text) {
+    for (std::size_t i = 0; i < text.fields.size(); ++i) {
+        const TextField& field  = text.fields[i];
+        FieldInfo        info;
+        std::string      name   = "field_" + number(i);
+        std::string      detail = field.detail;
+        info.kind          = field.kind;
+        info.size_kind     = field.size_kind;
+        info.evidence_bits = field.evidence_bits;
+        if (field.kind == FieldKind::Constant) {
+            info.bit_size   = static_cast<std::uint32_t>(8 * field.bytes.size());
+            info.byte_order = field.bytes.size() > 1 ? ByteOrder::Big : ByteOrder::NotApplicable;
+            for (std::size_t b = 0; b < field.bytes.size(); ++b) {
+                info.constant = (info.constant << 8) | field.bytes[b];
+            }
+        } else if (field.kind == FieldKind::Text) {
+            info.delimiter = field.delimiter;
+        } else {
+            info.bit_size      = text.checksum.width_bits;
+            info.byte_order    = ByteOrder::Big;
+            info.ascii_hex     = true;
+            info.covers_first  = field.covers_first;
+            info.covers_last   = field.covers_last;
+            info.evidence_bits = text.checksum.evidence_bits;
+            name               = "checksum";
+            detail             = checksum_name(text.checksum);
+        }
+        model->add_field(type, name, info, detail);
+    }
+}
+
+// What cut the frames is known when it was the flags, the lines or the gaps. A gap is never 0 (the segmentation takes
+// the shortest long one), so idle_gap_ns says it was the gaps, also for a segmentation that has no kind.
+FramingInfo framing_of(const SegmentationInfo& segmentation) {
+    FramingInfo framing;
+    if (segmentation.kind == FramingKind::Flagged) {
+        framing.kind      = FramingKind::Flagged;
+        framing.delimiter = segmentation.delimiter;
+        if (segmentation.escaped) {
+            framing.escaped        = true;
+            framing.escape         = segmentation.escape;
+            framing.delimiter_code = segmentation.delimiter_code;
+            framing.escape_code    = segmentation.escape_code;
+        }
+    } else if (segmentation.kind == FramingKind::Terminated) {
+        framing.kind      = FramingKind::Terminated;
+        framing.delimiter = segmentation.delimiter;
+    } else if (segmentation.kind == FramingKind::Contiguous) {
+        framing.kind = FramingKind::Contiguous;
+    } else if (segmentation.idle_gap_ns != 0) {
+        framing.kind        = FramingKind::IdleGap;
+        framing.idle_gap_ns = segmentation.idle_gap_ns;
+    }
+    return framing;
+}
+
 std::string hex_byte(unsigned value) {
     static const char digits[] = "0123456789ABCDEF";
     std::string       out      = "0x";
@@ -342,6 +401,32 @@ Analysis analyze_frames(const Capture& capture, const Segmentation& segmentation
     const Capture&       read     = stripped ? contents : capture;
     const Segmentation&  frames   = stripped ? whole : segmentation;
 
+    // Lines of text with a separator are cut into the fields that the separator makes, whatever size they have: the
+    // kinds of sentence of NMEA 0183 are types, not the many sizes that digits give them.
+    {
+        std::vector<std::vector<std::uint8_t> > lines;
+        for (std::size_t i = 0; i < frames.frame_count(); ++i) {
+            lines.push_back(frame_bytes(read, frames.frame(i)));
+        }
+        const TextTypes text = find_text_types(lines, options.fields);
+        if (text.found) {
+            info.ignored_frames = text.ignored;
+            Model model;
+            model.set_framing(framing_of(info.segmentation));
+            std::vector<MessageTypeReport> reports;
+            for (std::size_t t = 0; t < text.types.size(); ++t) {
+                MessageTypeReport report;
+                report.frame_bytes         = text.types[t].smallest;
+                report.largest_frame_bytes = text.types[t].largest;
+                report.frames              = text.types[t].frames;
+                report.checksum            = text.types[t].checksum;
+                add_text_fields(&model, model.add_message_type("type" + number(t)), text.types[t]);
+                reports.push_back(report);
+            }
+            return Analysis(info, segmentation, model, reports);
+        }
+    }
+
     // Kinds of message that come in several sizes are one type each, when a checksum explains all of
     // their frames; the sizes that are then taken are not types of their own.
     const MessageKinds         kinds = find_message_kinds(read, frames, options.fields.min_frames);
@@ -382,30 +467,8 @@ Analysis analyze_frames(const Capture& capture, const Segmentation& segmentation
     }
     info.ignored_frames = frames.frame_count() - typed_frames;
 
-    // What cut the frames is known when it was the flags or the gaps. A gap is
-    // never 0 (the segmentation takes the shortest long one), so idle_gap_ns says
-    // it was the gaps, also for a segmentation that has no kind.
     Model model;
-    FramingInfo framing;
-    if (info.segmentation.kind == FramingKind::Flagged) {
-        framing.kind      = FramingKind::Flagged;
-        framing.delimiter = info.segmentation.delimiter;
-        if (info.segmentation.escaped) {
-            framing.escaped        = true;
-            framing.escape         = info.segmentation.escape;
-            framing.delimiter_code = info.segmentation.delimiter_code;
-            framing.escape_code    = info.segmentation.escape_code;
-        }
-    } else if (info.segmentation.kind == FramingKind::Terminated) {
-        framing.kind      = FramingKind::Terminated;
-        framing.delimiter = info.segmentation.delimiter;
-    } else if (info.segmentation.kind == FramingKind::Contiguous) {
-        framing.kind = FramingKind::Contiguous;
-    } else if (info.segmentation.idle_gap_ns != 0) {
-        framing.kind        = FramingKind::IdleGap;
-        framing.idle_gap_ns = info.segmentation.idle_gap_ns;
-    }
-    model.set_framing(framing);
+    model.set_framing(framing_of(info.segmentation));
 
     std::vector<MessageTypeReport> reports;
     for (std::size_t t = 0; t < types.size(); ++t) {
@@ -480,7 +543,7 @@ std::string describe_analysis(const Analysis& analysis) {
     }
     out += "frames     " + number(info.frames);
     if (info.ignored_frames != 0) {
-        out += " (" + number(info.ignored_frames) + " of a size too rare to say anything about)";
+        out += " (" + number(info.ignored_frames) + " of a size or kind too rare to say anything about)";
     }
     out += "\n";
     for (std::size_t t = 0; t < analysis.type_count(); ++t) {

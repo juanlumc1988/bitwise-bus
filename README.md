@@ -227,8 +227,9 @@ bitwise capture-info FILE           a first look at a capture file: events,
                                     channels, directions, timing
 bitwise protocols [NAME]            the known protocols, or the model of one
 bitwise synth NAME                  a synthetic capture of a known protocol, or of
-                                    `random`, a protocol made up from the seed,
-                                    as a capture file, on standard output
+                                    `random` or `random-text`, a protocol made up
+                                    from the seed, as a capture file, on standard
+                                    output
     --seed N                        the same seed gives the same capture on
                                     every platform (default 1)
     --frames N                      how many frames, 0 to 100000 (default 20)
@@ -261,11 +262,14 @@ event, which is what the later stages of the pipeline will read.
 with a known answer, which is also what the tests of every stage are scored
 against. `synth random` is a different protocol for each seed: how its frames are
 told apart, from one to four kinds of message made of fields of every kind the
-pipeline claims, a checksum (or none), sometimes a payload of several sizes; and
-`--corrupt-permille` and `--lose-permille` put on any of them what a real line
-does, a byte that arrives wrong and a frame that does not arrive. Thousands of
-such protocols are what the tests try the pipeline on
-(`BW_SWEEP_SEEDS=3000 bw_tests -tc="synthetic sweep*"`).
+pipeline claims, a checksum (or none), sometimes a payload of several sizes;
+`synth random-text` is the same for lines of text, in the manner of NMEA 0183 (a
+separator that is a comma, a semicolon, a bar or a space, from one to three kinds
+of sentence, numbers and words, a checksum or none); and `--corrupt-permille` and
+`--lose-permille` put on any of them what a real line does, a byte that arrives
+wrong and a frame that does not arrive. Thousands of such protocols are what the
+tests try the pipeline on (`BW_SWEEP_SEEDS=3000 bw_tests -tc="synthetic sweep*"`,
+and `-tc="text sweep*"` for the text).
 
 ```console
 $ bitwise protocols
@@ -327,7 +331,10 @@ each message that is not in the frame. NMEA
 sentences are text, and come three at a time with a second of silence after them: the gaps
 find the seconds, and `analyze` cuts them into lines, which are the sentences; they differ in
 length, and the exclusive-or checksum, written as two hexadecimal characters after the star,
-is found in each kind. That is the
+is found in each kind. The three kinds of sentence are three message types, whose fields are the
+dollar, the address, what is between each pair of commas (a constant when it never changes,
+and else text up to the comma), the checksum and the line end, as many as the protocol has, and
+`export` writes them as Kaitai strings with a terminator. That is the
 starting point of the next steps of the [roadmap](docs/roadmap.md), measured in its table of
 the baseline.
 
@@ -365,8 +372,20 @@ and on nothing else: there are no real captures in it.
 - **Field discovery** works byte by byte: a byte that never changes, one that
   takes a few values, or one with no visible structure, with a run of the last kind
   taken as one field. Fields smaller than a byte are not handled, a number of
-  several bytes whose high bytes never change comes out as several fields, and text
-  of varying size is not split into fields.
+  several bytes whose high bytes never change comes out as several fields.
+- **Text** is read when it comes in lines (at least 95% of the bytes are
+  characters, and the lines end with a line feed) that start the same way up to a
+  separator: the byte that is not a letter or a digit that has four lines in five
+  or more in kinds of four lines or more, a kind being the same start and the same
+  number of separators; the comma of NMEA 0183, not the dollar. Its fields are the
+  constants (the address, what never changes) and text up to the separator, with
+  the values said when there are a few that recur, and, if the checksum that stage 2
+  finds is written as two hexadecimal characters after one byte that it does not
+  cover (the star), that and the line end. The numbers in text are text: a
+  latitude is not a float. Text that does not start the same way (CSV with a
+  value first) is cut into lines and has the fields that bytes have, a
+  checksum written in another way is not one of its fields, and lines whose
+  sizes differ by more than four times are not taken as lines.
 - **Field typing** claims constants, enumerations, counters (of up to eight
   bytes, in either byte order, with the step) and 32-bit floats and, in a type of
   several sizes, the length, with the evidence for each in bits, and calls
@@ -397,16 +416,15 @@ The plan is short on purpose; the detail is in [docs/roadmap.md](docs/roadmap.md
 stuffing, a sync byte and a length, lines of text), the checksum stage (66 CRCs,
 five sums, checksums written as text, a CRC with a byte that is in no frame), message
 types by discriminator, field discovery and typing for the six protocols of the
-corpus (with counters of several bytes and floats put together), protocols made up
-from a seed and noise on the line, to try all of it on thousands of cases (and
-read what a line that is not perfect leaves), and the Kaitai Struct exporter,
-checked with the real Kaitai tools.
+corpus (with counters of several bytes and floats put together, and text split at its
+separator), protocols made up from a seed, of bytes and of text, and noise on the line, to
+try all of it on thousands of cases (and read what a line that is not perfect leaves),
+and the Kaitai Struct exporter, checked with the real Kaitai tools.
 
 **What is left for 1.0**, in one pull request: the closing of the API, the
 thresholds and the release.
 
-**Not planned:** splitting text into fields (NMEA 0183 is framed and its checksum
-found, its fields are not), numbers that are only small, more protocols with a
+**Not planned:** numbers that are only small, numbers in text, more protocols with a
 name, a Wireshark dissector, DBC, live capture, bit-level framing, a Qt viewer, and
 real captures. The library has only
 been tested on synthetic captures with a known answer and on published test vectors,

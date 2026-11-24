@@ -47,6 +47,7 @@ add_library(bw_core STATIC
     src/catalog.cpp
     src/sums.cpp
     src/messages.cpp
+    src/text.cpp
     src/crc_search.cpp
     src/capture.cpp
     src/model.cpp
@@ -156,7 +157,9 @@ if(BW_BUILD_TESTS)
         tests/test_unstuff.cpp
         tests/test_sums.cpp
         tests/test_messages.cpp
-        tests/test_synthetic.cpp)
+        tests/test_synthetic.cpp
+        tests/test_text.cpp
+        tests/test_synthetic_text.cpp)
     target_include_directories(bw_tests PRIVATE tests/third_party)
     target_compile_definitions(bw_tests PRIVATE
         "BW_CORPUS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus\""
@@ -230,6 +233,9 @@ if(BW_BUILD_TESTS)
     add_test(NAME cli_synth_random COMMAND bitwise synth random --seed 1 --frames 3)
     set_tests_properties(cli_synth_random PROPERTIES PASS_REGULAR_EXPRESSION
         "# bitwise-capture 1.*time_ns,channel,direction,id,data.*0,line,,,[0-9a-f][0-9a-f]")
+    add_test(NAME cli_synth_random_text COMMAND bitwise synth random-text --seed 1 --frames 3)
+    set_tests_properties(cli_synth_random_text PROPERTIES PASS_REGULAR_EXPRESSION
+        "# bitwise-capture 1.*time_ns,channel,direction,id,data.*0,line,,,[0-9a-f][0-9a-f]")
     add_test(NAME cli_synth_noise_rate COMMAND bitwise synth random --frames 3 --lose-permille 1001)
     set_tests_properties(cli_synth_noise_rate PROPERTIES PASS_REGULAR_EXPRESSION
         "--lose-permille: '1001' is not a whole number from 0 to 1000")
@@ -274,11 +280,20 @@ if(BW_BUILD_TESTS)
         COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_nmea0183_seed3_9frames_jitter300.csv)
     set_tests_properties(cli_analyze_nmea0183 PROPERTIES PASS_REGULAR_EXPRESSION
         "framing +lines: each frame ends with the byte 0x0A \\(9 of them in the capture\\).*frames +9.*framing: ends with 0xA")
+    # And on a longer one, where each kind of sentence has enough lines to be a type: the fields that the commas make.
+    add_test(NAME cli_analyze_nmea0183_fields
+        COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_nmea0183_seed3_60frames_jitter300.csv)
+    set_tests_properties(cli_analyze_nmea0183_fields PROPERTIES PASS_REGULAR_EXPRESSION
+        "frames +60\n+type0 +72 to 74 bytes, 20 frames[;] checksum XOR-8, written as two hexadecimal characters, evidence 160 bits.*type2 +36 to 40 bytes, 20 frames.*0 \"field_0\" +constant +8 bits @0 = 0x24.*1 \"field_1\" +constant +48 bits @8 big-endian = 0x47504747412C.*2 \"field_2\" +text +up to 0x2C @56.*\"checksum\" +checksum +16 bits @[?] big-endian as hex text covers 1..15")
+    add_test(NAME cli_export_nmea0183
+        COMMAND bitwise export ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_nmea0183_seed3_60frames_jitter300.csv --type 2)
+    set_tests_properties(cli_export_nmea0183 PROPERTIES PASS_REGULAR_EXPRESSION
+        "id: field_2.*type: str.*terminator: 0x2c.*include: true.*encoding: ASCII.*id: checksum.*type: str.*size: 2.*encoding: ASCII")
     add_test(NAME cli_analyze_option
         COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_modbus_rtu_seed1_50frames_jitter300.csv
                 --min-frames 51)
     set_tests_properties(cli_analyze_option PROPERTIES PASS_REGULAR_EXPRESSION
-        "frames +50 \\(50 of a size too rare to say anything about\\)")
+        "frames +50 \\(50 of a size or kind too rare to say anything about\\)")
     add_test(NAME cli_analyze_no_file COMMAND bitwise analyze)
     set_tests_properties(cli_analyze_no_file PROPERTIES PASS_REGULAR_EXPRESSION
         "analyze takes exactly one file")

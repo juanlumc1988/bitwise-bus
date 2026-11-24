@@ -28,6 +28,12 @@ seq:
     size: 4
     encoding: ASCII
     doc: "text"
+  - id: line
+    type: str
+    terminator: 0x2c
+    include: true
+    encoding: ASCII
+    doc: "text"
   - id: stuff
     size: 3
     doc: "payload"

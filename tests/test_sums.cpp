@@ -614,6 +614,98 @@ TEST_CASE("sums, stage 2: a sum that starts after bytes that are always zero is 
     CHECK(f.header_skip == 0);
 }
 
+TEST_CASE("sums, stage 2: a sum that starts after bytes that cancel is the one that starts before them") {
+    // An exclusive or over an address of GNGNS and a number: the first four bytes are in every frame and are the same
+    // value twice over, so what they add to the exclusive or is nothing, and the frames cannot say whether they are covered.
+    // The one that covers them is kept. A plain sum of the same bytes does not cancel them, and one of bytes that add
+    // up to 256 does not either for an exclusive or.
+    fixtures::Random rng(54);
+    const std::string address = "GNGNS";
+    std::vector<Bytes> xors, sums;
+    for (int i = 0; i < 24; ++i) {
+        Bytes f(address.begin(), address.end());
+        for (int k = 0; k < 4; ++k) {
+            f.push_back(static_cast<std::uint8_t>(0x30 + rng.byte() % 10));
+        }
+        Bytes g = f;
+        std::uint8_t x = 0, a = 0;
+        for (std::size_t k = 0; k < f.size(); ++k) {
+            x = static_cast<std::uint8_t>(x ^ f[k]);
+            a = static_cast<std::uint8_t>(a + f[k]);
+        }
+        f.push_back(x);
+        g.push_back(a);
+        xors.push_back(f);
+        sums.push_back(g);
+    }
+    const ChecksumFinding f = search(xors);
+    REQUIRE(f.found);
+    CHECK(f.candidates == 1);
+    CHECK(bw::checksum_algorithm_name(f.algorithm) == "XOR-8");
+    CHECK(f.header_skip == 0);
+
+    // The same bytes and a plain sum: skipping 'GN' does change the sum, so it is not the same finding.
+    const ChecksumFinding g = search(sums);
+    REQUIRE(g.found);
+    CHECK(g.candidates == 1);
+    CHECK(bw::checksum_algorithm_name(g.algorithm) == "SUM-8");
+    CHECK(g.header_skip == 0);
+
+    // Bytes that add up to 256 are nothing to a plain sum (0x80 and 0x80), and 0x80 twice cancels in an exclusive or too.
+    std::vector<Bytes> halves;
+    for (int i = 0; i < 24; ++i) {
+        Bytes h(2, 0x80);
+        for (int k = 0; k < 4; ++k) {
+            h.push_back(rng.byte());
+        }
+        std::uint8_t a = 0;
+        for (std::size_t k = 0; k < h.size(); ++k) {
+            a = static_cast<std::uint8_t>(a + h[k]);
+        }
+        h.push_back(a);
+        halves.push_back(h);
+    }
+    const ChecksumFinding h = search(halves);
+    REQUIRE(h.found);
+    CHECK(h.candidates == 1);
+    CHECK(bw::checksum_algorithm_name(h.algorithm) == "SUM-8");
+    CHECK(h.header_skip == 0);
+
+    // The same with a sum that is negated.
+    std::vector<Bytes> negated;
+    for (int i = 0; i < 24; ++i) {
+        Bytes h(2, 0x80);
+        for (int k = 0; k < 4; ++k) {
+            h.push_back(rng.byte());
+        }
+        std::uint8_t a = 0;
+        for (std::size_t k = 0; k < h.size(); ++k) {
+            a = static_cast<std::uint8_t>(a + h[k]);
+        }
+        h.push_back(static_cast<std::uint8_t>(256 - a));
+        negated.push_back(h);
+    }
+    const ChecksumFinding n = search(negated);
+    REQUIRE(n.found);
+    CHECK(n.candidates == 1);
+    CHECK(bw::checksum_algorithm_name(n.algorithm) == "SUM-8/NEGATED");
+    CHECK(n.header_skip == 0);
+
+    // A byte that is not the same in every frame does not cancel: where it is, the frames say that it is covered.
+    std::vector<Bytes> varying = xors;
+    for (std::size_t i = 0; i < varying.size(); ++i) {
+        varying[i][1] = static_cast<std::uint8_t>('A' + i % 7);          // 'G' and 'N' no longer cancel
+        std::uint8_t x = 0;
+        for (std::size_t k = 0; k + 1 < varying[i].size(); ++k) {
+            x = static_cast<std::uint8_t>(x ^ varying[i][k]);
+        }
+        varying[i].back() = x;
+    }
+    const ChecksumFinding v = search(varying);
+    REQUIRE(v.found);
+    CHECK(v.header_skip == 0);
+}
+
 TEST_CASE("sums, stage 2: a sum with one frame in twenty wrong is found, and says so") {
     fixtures::Random   rng(53);
     std::vector<Bytes> frames;

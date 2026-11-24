@@ -123,6 +123,26 @@ TEST_CASE("kaitai: what the pipeline infers from a capture checked in") {
           "    doc: \"checksum, CRC-16/MODBUS, over field_0 to field_5 (Kaitai does not check it); evidence 800 bits\"\n");
 }
 
+TEST_CASE("kaitai: what the pipeline infers from lines of text checked in") {
+    // The third type of NMEA 0183, the velocity: the dollar and the address are contents, what varies is text up to
+    // a comma, what does not is contents that ends with one, and the checksum is two characters.
+    const bw::Analysis a =
+        bw::analyze(bw::parse_capture_csv(read_corpus("synth_nmea0183_seed3_60frames_jitter300.csv")),
+                    bw::AnalyzeOptions());
+    REQUIRE(a.type_count() == 3);
+    const std::string ksy = bw::export_kaitai(a.model(), 2, "velocity");
+    CHECK(ksy.find("doc: \"Message type 'type2'. Written by bitwise-bus. A frame ends with the byte 0x0a.\"\n") !=
+          std::string::npos);
+    CHECK(ksy.find("  - id: field_0\n    contents: [0x24]\n") != std::string::npos);
+    CHECK(ksy.find("  - id: field_1\n    contents: [0x47, 0x50, 0x56, 0x54, 0x47, 0x2c]\n") != std::string::npos);
+    CHECK(ksy.find("  - id: field_2\n    type: str\n    terminator: 0x2c\n    include: true\n    encoding: ASCII\n"
+                   "    doc: \"text; evidence 20 bits\"\n") != std::string::npos);
+    CHECK(ksy.find("  - id: checksum\n    type: str\n    size: 2\n    encoding: ASCII\n"
+                   "    doc: \"checksum, XOR-8, written as hexadecimal text, over field_1 to field_10 "
+                   "(Kaitai does not check it); evidence 160 bits\"\n") != std::string::npos);
+    CHECK(ksy.find("  - id: field_12\n    contents: [0x0d, 0x0a]\n") != std::string::npos);
+}
+
 TEST_CASE("kaitai: every kind of field, as the definition that the round trip compiles") {
     std::ifstream in((std::string(BW_ROUNDTRIP_DIR) + "/mapping.ksy").c_str(), std::ios::binary);
     REQUIRE(in.good());
@@ -204,6 +224,16 @@ TEST_CASE("kaitai: text, payload and unknown are strings and bytes of their size
     unknown.add("f", fixed(FieldKind::Unknown, 16));
     CHECK(body(unknown.out()) == "    size: 2\n");
     CHECK(doc_of(unknown.out()) == "\"unknown\"");
+}
+
+TEST_CASE("kaitai: text that ends with a byte is a string with that terminator, kept in it") {
+    OneType t;
+    FieldInfo line = fixed(FieldKind::Text, 0);
+    line.size_kind = bw::SizeKind::Delimited;
+    line.delimiter = 0x2A;
+    t.add("f", line, "one of \"A\", \"D\"");
+    CHECK(body(t.out()) == "    type: str\n    terminator: 0x2a\n    include: true\n    encoding: ASCII\n");
+    CHECK(doc_of(t.out()) == "\"text, one of \\\"A\\\", \\\"D\\\"\"");
 }
 
 TEST_CASE("kaitai: the doc says what the model found, with the detail and the evidence") {
@@ -356,8 +386,9 @@ TEST_CASE("kaitai: what the exporter does not write yet is refused, and nothing 
     rest.size_kind = bw::SizeKind::ToEnd;
     to_end.add("body", rest);
     CHECK_THROWS_AS(to_end.out(), std::invalid_argument);
+    // Only text can end with a byte; something else that does is not written.
     OneType delimited;
-    FieldInfo line = fixed(FieldKind::Text, 0);
+    FieldInfo line = fixed(FieldKind::Payload, 0);
     line.size_kind = bw::SizeKind::Delimited;
     line.delimiter = 0x0A;
     delimited.add("line", line);

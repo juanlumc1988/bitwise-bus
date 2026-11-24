@@ -26,6 +26,14 @@
 // the checksum is "checksum"; in a type of several sizes the length is "length"
 // and what it counts is "payload", which comes before the checksum.
 //
+// Frames that are lines of text with a separator (bw/text.h: NMEA 0183) are not
+// grouped by size. A type is a kind of line (the lines that start the same way up to
+// the separator and have as many of them), and its fields are named field_N after
+// their index, since where one starts depends on the line: the constants, the text
+// up to the separator, the checksum if it is written as two hexadecimal
+// characters, and the end. Their sizes are those of the shortest and the longest
+// line.
+//
 // The shape of this API follows the rule in docs/roadmap.md: plain structs,
 // the collections behind a class.
 
@@ -64,7 +72,7 @@ struct AnalysisInfo {
     std::uint64_t    events         = 0;
     std::uint64_t    bytes          = 0;
     std::uint64_t    frames         = 0;    // as segmentation cut them
-    std::uint64_t    ignored_frames = 0;    // those of a size with too few frames to say anything
+    std::uint64_t    ignored_frames = 0;    // those of a size, or of a kind of text, with too few frames to say anything
     SegmentationInfo segmentation;
 };
 

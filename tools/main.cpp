@@ -245,12 +245,14 @@ int cmd_synth(const std::vector<std::string>& args) {
         return 2;
     }
     try {
-        // `random` is not a protocol of the registry but one made up from the seed (bw/synthetic.h).
+        // `random` and `random-text` are not protocols of the registry but ones made up from the seed (bw/synthetic.h).
         bw::SyntheticOptions made_up;
         made_up.seed            = options.seed;
         made_up.frames          = options.frames;
         made_up.jitter_permille = options.jitter_permille;
-        bw::Dataset dataset = name == "random" ? bw::generate_synthetic(made_up) : bw::generate_protocol(name, options);
+        bw::Dataset dataset = name == "random"      ? bw::generate_synthetic(made_up)
+                            : name == "random-text" ? bw::generate_synthetic_text(made_up)
+                                                    : bw::generate_protocol(name, options);
         noise.seed          = options.seed;
         if (noise.corrupt_permille != 0 || noise.lose_permille != 0) {
             dataset = bw::add_noise(dataset, noise);
