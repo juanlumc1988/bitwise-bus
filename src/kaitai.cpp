@@ -137,6 +137,17 @@ std::string export_kaitai(const Model& model, std::size_t message_type, const st
         if (!names.insert(name).second) {
             throw std::invalid_argument("two fields are named '" + name + "'");
         }
+        if (info.size_kind == SizeKind::FromField) {
+            // `size: length`: the field it is sized by is an integer, which the model says is earlier.
+            const FieldInfo length = model.field(message_type, info.size_field);
+            if (number_type(length).empty()) {
+                throw std::invalid_argument("the field '" + name + "' is sized by '" +
+                                            model.field_name(message_type, info.size_field) +
+                                            "', which is not an integer of 8, 16, 32 or 64 bits, "
+                                            "and the Kaitai exporter does not write that yet");
+            }
+            continue;
+        }
         if (info.size_kind != SizeKind::Fixed) {
             throw std::invalid_argument("the field '" + name + "' has a size that depends on the frame, "
                                         "which the Kaitai exporter does not write yet");
@@ -175,7 +186,9 @@ std::string export_kaitai(const Model& model, std::size_t message_type, const st
         const FieldInfo info = model.field(message_type, i);
         out += "  - id: " + model.field_name(message_type, i) + "\n";
         const std::uint32_t bytes = info.bit_size / 8;
-        if (info.kind == FieldKind::Constant) {
+        if (info.size_kind == SizeKind::FromField) {
+            out += "    size: " + model.field_name(message_type, info.size_field) + "\n";
+        } else if (info.kind == FieldKind::Constant) {
             out += "    contents: " + contents_of(info) + "\n";
         } else if (info.kind == FieldKind::Text || info.ascii_hex) {
             out += "    type: str\n    size: " + number(bytes) + "\n    encoding: ASCII\n";

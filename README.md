@@ -322,24 +322,31 @@ the baseline.
 
 ## What this does not do yet
 
-The first versions of the later stages are in; each is deliberately the
-simplest thing that can work, and each is to be deepened (see the
-[roadmap](docs/roadmap.md)). Today:
+What follows is where the library stops today, and, for most of it, where it will
+stop at 1.0 (the [roadmap](docs/roadmap.md) says which is which). It has been
+tested on synthetic captures with a known answer and on published test vectors,
+and on nothing else: there are no real captures in it.
 
-- **Frame segmentation** looks only at time: it cuts at the long gaps, and says
-  nothing was found when the gaps do not split into short and long ones. A
-  capture without timestamps, a bus with delimiters or byte stuffing, or one
-  whose frames are told apart by a length field is not segmented yet.
-- **Field discovery** groups frames by size, which is the only notion of
-  message type there is, and works byte by byte: a byte that never changes, one
-  that takes a few values, or one with no visible structure, with a run of the
-  last kind taken as one field. Frames of varying length, message types told
-  apart by a code, and fields smaller than a byte are not handled.
-- **Field typing** claims constants, enumerations and counters, with the
-  evidence for each in bits, and calls everything else payload without
-  claiming anything. Lengths, timestamps, floats, text and flags are not
-  recognised yet, and neither are counters that span bytes which discovery
-  has already cut apart.
+- **Frame segmentation** cuts at the long gaps, at flags (with their byte
+  stuffing), from a sync byte by the length the frame says it has, and in lines of
+  text. A terminator other than a line feed is not found, a stuffing other than the
+  two known (RFC 1662 and SLIP) is not recognised, and a capture without
+  timestamps, flags, sync byte or lines is not segmented.
+- **Message types** are frame sizes, or, when a length field says the size of the
+  frames and a discriminator (a message id) is the same in all the frames of a
+  kind, all the sizes of a kind, if a checksum explains them all. A size that two
+  messages share, and a capture in which a frame has a wrong length, are not
+  handled yet.
+- **Field discovery** works byte by byte: a byte that never changes, one that
+  takes a few values, or one with no visible structure, with a run of the last kind
+  taken as one field. Fields smaller than a byte are not handled, a number of
+  several bytes whose high bytes never change comes out as several fields, and text
+  of varying size is not split into fields.
+- **Field typing** claims constants, enumerations, counters and, in a type of
+  several sizes, the length, with the evidence for each in bits, and calls
+  everything else payload without claiming anything. Timestamps, floats, text and
+  flags are not recognised, and neither are counters that span bytes which
+  discovery has already cut apart.
 - **Non-byte-aligned checksum fields.** `crc_compute` handles 15-, 17- and
   21-bit widths correctly, and the catalogue includes CAN and CAN-FD. But
   *locating* such a field in a capture needs bit-level framing, so
@@ -349,41 +356,32 @@ simplest thing that can work, and each is to be deepened (see the
   parameter space — which has a neat shortcut, since for a fixed width and
   reflection the polynomial can be recovered algebraically from a few frames
   differing in one byte, rather than brute-forced.
-- **Only Kaitai Struct is written.** A Wireshark dissector, DBC for CAN and a
-  C++ header are to come, and the Kaitai exporter refuses what it does not
-  write yet (fields that are not a whole number of bytes, or whose size depends
-  on another field) instead of approximating it. It cannot say what a field is
-  called, and what an enumeration's values mean.
-- **No GUI.** The output is meant for tools that already exist — Kaitai
-  Struct, a Wireshark dissector, DBC — and those come first. A Qt view with
-  fields coloured by inferred type comes after.
+- **Only Kaitai Struct is written.** The exporter refuses what it does not write
+  (fields that are not a whole number of bytes, or whose size runs to the end or up
+  to a delimiter, or is given by a length that is not an integer of 8, 16, 32 or
+  64 bits) instead of approximating it. It cannot say what a field is called, and
+  what an enumeration's values mean.
+- **No GUI, no other exporters, no live capture.** Not planned.
 
 ## Roadmap
 
-There are two tracks. The detail, including what "done" means for each stage
-and the synthetic protocols each one is tested against, is in
-[docs/roadmap.md](docs/roadmap.md).
+The plan is short on purpose; the detail is in [docs/roadmap.md](docs/roadmap.md).
 
-**The pipeline.** Built first as a thin slice that goes all the way through (a
-Modbus RTU capture in, a Kaitai Struct definition out) and then deepened one
-stage at a time, each measured against synthetic captures with a known answer:
+**Done:** the capture model and importers, segmentation (idle gaps, flags with byte
+stuffing, a sync byte and a length, lines of text), the checksum stage (66 CRCs,
+five sums, checksums written as text, a CRC with a byte that is in no frame), message
+types by discriminator, field discovery and typing for the six protocols of the
+corpus, and the Kaitai Struct exporter, checked with the real Kaitai tools.
 
-1. Capture model and importers, a synthetic-protocol corpus, and an
-   evaluation harness.
-2. Checksums beyond the catalogued CRCs: sums, XOR, Fletcher, hidden seeds,
-   checksums written as ASCII hex, uncatalogued polynomials.
-3. Frame segmentation: idle gaps, delimiters, byte stuffing, and segmentation
-   guided by a checksum or a length field.
-4. Field discovery: message types first, then entropy per type.
-5. Field typing: constants, enums, counters, timestamps, lengths, floats, text,
-   flags; request/response correlation.
-6. Export: Kaitai Struct, a Wireshark Lua dissector, DBC, a C++ header — each
-   checked by re-parsing the original capture.
+**What is left for 1.0**, in three pull requests: the fields that are still wrong
+(numbers of two or three bytes with a constant high byte, lengths, text), a
+parametric generator of protocol shapes with noise to test the generality that six
+named protocols cannot, and the closing of the API, the thresholds and the release.
 
-**Independent features,** each built and finished on its own once the
-pipeline exists: stimulus labelling, session state machines, live capture and
-UART parameter detection, bit-level framing (raw CAN, bit stuffing), Python
-bindings, interop with rewind-mcu, and a Qt viewer.
+**Not planned:** more protocols with a name, a Wireshark dissector, DBC, live
+capture, bit-level framing, a Qt viewer, and real captures. The library has only
+been tested on synthetic captures with a known answer and on published test vectors,
+and that is as far as this goes.
 
 ## Relationship to rewind-mcu
 

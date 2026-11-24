@@ -343,9 +343,9 @@ TEST_CASE("kaitai: what the exporter does not write yet is refused, and nothing 
     eleven.add("f", fixed(FieldKind::Counter, 11, ByteOrder::Big));
     CHECK_THROWS_AS(eleven.out(), std::invalid_argument);
 
-    // A size that depends on the frame.
+    // A size that depends on the frame, and is not a length that Kaitai has an integer for.
     OneType from_field;
-    from_field.add("n", fixed(FieldKind::Length, 8));
+    from_field.add("n", fixed(FieldKind::Length, 24, ByteOrder::Big));
     FieldInfo sized = fixed(FieldKind::Payload, 0);
     sized.size_kind  = bw::SizeKind::FromField;
     sized.size_field = 0;
@@ -373,6 +373,36 @@ TEST_CASE("kaitai: what the exporter does not write yet is refused, and nothing 
         FAIL("no exception");
     } catch (const std::invalid_argument& e) {
         CHECK(std::string(e.what()).find("'bad'") != std::string::npos);
+    }
+}
+
+TEST_CASE("kaitai: a payload sized by a length is `size:` and the name of the length") {
+    // MAVLink 2's shape: a start byte, a length, a payload that it sizes, and a CRC after it.
+    for (int width = 8; width <= 32; width += 8) {
+        if (width == 24) {
+            continue;
+        }
+        CAPTURE(width);
+        OneType t;
+        t.add("start", constant(8, ByteOrder::NotApplicable, 0xFD));
+        t.add("length", fixed(FieldKind::Length, static_cast<std::uint32_t>(width),
+                              width == 8 ? ByteOrder::NotApplicable : ByteOrder::Little));
+        FieldInfo sized = fixed(FieldKind::Payload, 0);
+        sized.size_kind  = bw::SizeKind::FromField;
+        sized.size_field = 1;
+        t.add("payload", sized);
+        FieldInfo crc = fixed(FieldKind::Checksum, 16, ByteOrder::Little);
+        crc.covers_first = 1;
+        crc.covers_last  = 2;
+        t.add("crc", crc);
+        const std::string out = t.out();
+        const std::string number = width == 8 ? "u1" : width == 16 ? "u2le" : "u4le";
+        CHECK(out.find("  - id: length\n    type: " + number + "\n") != std::string::npos);
+        CHECK(out.find("  - id: payload\n    size: length\n    doc: \"payload\"\n") != std::string::npos);
+        // The CRC after it is read as it is, and the order of the fields is the model's.
+        CHECK(out.find("  - id: crc\n    type: u2le\n") != std::string::npos);
+        CHECK(out.find("id: payload") < out.find("id: crc"));
+        CHECK(out.find("id: length") < out.find("id: payload"));
     }
 }
 

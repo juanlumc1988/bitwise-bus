@@ -9,6 +9,8 @@
 #include <stdexcept>
 #include <utility>
 
+#include "bw/messages.h"
+
 namespace bw {
 
 namespace {
@@ -18,9 +20,9 @@ std::string number(std::uint64_t value) {
 }
 
 // Most frames first, then the smaller size.
-bool more_frequent(const std::pair<std::uint64_t, std::uint64_t>& a,
-                   const std::pair<std::uint64_t, std::uint64_t>& b) {
-    return a.first != b.first ? a.first > b.first : a.second < b.second;
+typedef std::pair<std::pair<std::uint64_t, std::uint64_t>, std::int64_t> TypeKey;
+bool more_frequent_type(const TypeKey& a, const TypeKey& b) {
+    return a.first.first != b.first.first ? a.first.first > b.first.first : a.first.second < b.first.second;
 }
 
 FieldInfo info_of(const FieldRegion& region) {
@@ -79,6 +81,151 @@ void add_fields(Model* model, std::size_t type, const FieldMap& fields,
         }
         model->add_field(type, name, info, detail);
     }
+}
+
+// A kind of message that has frames of several sizes, as the model has it: the fields of its header
+// (up to where the payload starts), the length that says how long the payload is, the payload, and the
+// checksum after it.
+struct KindType {
+    std::vector<FieldRegion> header;
+    std::size_t              length_field  = 0;        // the region that holds the length
+    std::size_t              first_covered = 0;        // the region where what the checksum covers starts
+    ChecksumFinding          checksum;
+    LengthField              length;
+    std::uint32_t            smallest = 0;
+    std::uint32_t            largest  = 0;
+    std::uint32_t            frames   = 0;
+};
+
+// Tries to make one message type of a kind. It needs a checksum that explains the frames of all of its
+// sizes (the same, with the same hidden byte: evidence that they are one kind and not several that
+// share a discriminator), because where the payload starts is the length constant less what comes after
+// the payload: size = length + adjust, and adjust is the header and what follows. Without it, the sizes
+// stay types of their own.
+bool build_kind(const Capture& read, const Segmentation& frames, const MessageKinds& kinds, std::size_t kind,
+                const FieldOptions& options, KindType* out) {
+    std::vector<std::vector<std::uint8_t> > bytes;
+    for (std::size_t i = 0; i < frames.frame_count(); ++i) {
+        if (kinds.frame_kind[i] == static_cast<std::int32_t>(kind)) {
+            bytes.push_back(frame_bytes(read, frames.frame(i)));
+        }
+    }
+    if (bytes.empty()) {
+        return false;
+    }
+    std::size_t smallest = bytes[0].size();
+    std::size_t largest  = bytes[0].size();
+    for (std::size_t i = 1; i < bytes.size(); ++i) {
+        smallest = std::min(smallest, bytes[i].size());
+        largest  = std::max(largest, bytes[i].size());
+    }
+
+    // A checksum written as text (which has a separator, as in NMEA, or not) or with bytes after it is not put into
+    // the model of a kind: the type has the checksum last, as bytes.
+    const ChecksumFinding checksum = find_checksum_of_frames(bytes);
+    if (!checksum.found || checksum.ascii_hex || checksum.trailer_skip != 0) {
+        return false;
+    }
+    // The length counts the payload, so what follows it is the checksum and the rest is the header; a
+    // length that counts the checksum too leaves no room for it.
+    const std::uint64_t after  = checksum.width_bits / 8;
+    const LengthField&  length = kinds.length;
+    if (static_cast<std::uint64_t>(length.adjust) < after) {
+        return false;
+    }
+    // adjust is at most the size of the smallest frame (the length is never negative), so the header, which
+    // is the first payload_start bytes, is in all of them.
+    const std::uint64_t payload_start = static_cast<std::uint64_t>(length.adjust) - after;
+
+    // The header, as frames of their own, which stage 4 and 5 read like any others.
+    Capture                header;
+    std::vector<FrameSpan> spans;
+    for (std::size_t i = 0; i < bytes.size(); ++i) {
+        header.add_event(EventInfo(), std::vector<std::uint8_t>(bytes[i].begin(),
+                         bytes[i].begin() + static_cast<std::ptrdiff_t>(payload_start)));
+        FrameSpan span;
+        span.first_event = i;
+        span.event_count = 1;
+        spans.push_back(span);
+    }
+    SegmentationInfo info;
+    info.found = true;
+    const Segmentation whole(info, spans);
+    const FieldMap     layout = discover_fields(header, whole, ChecksumFinding(),
+                                                static_cast<std::uint32_t>(payload_start), options);
+    if (layout.region_count() == 0) {
+        return false;
+    }
+    const FieldMap typed = type_fields(layout, header, whole);
+
+    // The length is a field of its own, of all of its bytes: stage 4 sees bytes, and a length of two comes out
+    // as two, which are put together when they are the length and nothing else. A run of bytes with no structure
+    // that goes across an end of the length (a length with many values, next to a counter) leaves some of its bytes
+    // uncounted, and then the type has no length to be sized by. What the checksum covers has to start at a field.
+    bool          first_found = checksum.header_skip == payload_start;
+    std::uint32_t absorbed    = 0;
+    bool          length_made = false;
+    out->first_covered        = typed.region_count();      // the payload, if that is where it starts
+    for (std::size_t i = 0; i < typed.region_count(); ++i) {
+        FieldRegion         region = typed.region(i);
+        const std::uint32_t end    = region.byte_offset + region.byte_size;
+        const bool          inside = region.byte_offset >= length.offset && end <= length.offset + length.bytes;
+        if (inside) {
+            absorbed += region.byte_size;
+            if (length_made) {
+                continue;
+            }
+            region.byte_offset = length.offset;
+            region.byte_size   = length.bytes;
+            out->length_field  = out->header.size();
+            length_made        = true;
+        }
+        if (region.byte_offset == checksum.header_skip) {
+            out->first_covered = out->header.size();
+            first_found        = true;
+        }
+        out->header.push_back(region);
+    }
+    if (absorbed != length.bytes || !first_found) {
+        return false;
+    }
+    out->checksum = checksum;
+    out->length   = length;
+    out->smallest = static_cast<std::uint32_t>(smallest);
+    out->largest  = static_cast<std::uint32_t>(largest);
+    out->frames   = static_cast<std::uint32_t>(bytes.size());
+    return true;
+}
+
+void add_kind_fields(Model* model, std::size_t type, const KindType& kind) {
+    for (std::size_t i = 0; i < kind.header.size(); ++i) {
+        const FieldRegion region = kind.header[i];
+        FieldInfo         info   = info_of(region);
+        std::string       name   = "field_" + number(region.byte_offset);
+        if (i == kind.length_field) {
+            info.kind          = FieldKind::Length;
+            info.constant      = 0;
+            info.byte_order    = kind.length.bytes == 1 ? ByteOrder::NotApplicable
+                               : kind.length.big_endian ? ByteOrder::Big : ByteOrder::Little;
+            info.evidence_bits = kind.length.evidence_bits;
+            name               = "length";
+        }
+        model->add_field(type, name, info, "");
+    }
+    FieldInfo payload;
+    payload.kind       = FieldKind::Payload;
+    payload.size_kind  = SizeKind::FromField;
+    payload.size_field = static_cast<std::uint32_t>(kind.length_field);
+    const std::size_t payload_index = model->add_field(type, "payload", payload, "");
+
+    FieldInfo checksum;
+    checksum.kind          = FieldKind::Checksum;
+    checksum.bit_size      = kind.checksum.width_bits;
+    checksum.byte_order    = kind.checksum.byte_order;
+    checksum.covers_first  = static_cast<std::uint32_t>(kind.first_covered);
+    checksum.covers_last   = static_cast<std::uint32_t>(payload_index);
+    checksum.evidence_bits = kind.checksum.evidence_bits;
+    model->add_field(type, "checksum", checksum, checksum_name(kind.checksum));
 }
 
 std::string hex_byte(unsigned value) {
@@ -180,21 +327,45 @@ Analysis analyze_frames(const Capture& capture, const Segmentation& segmentation
     const Capture&       read     = stripped ? contents : capture;
     const Segmentation&  frames   = stripped ? whole : segmentation;
 
+    // Kinds of message that come in several sizes are one type each, when a checksum explains all of
+    // their frames; the sizes that are then taken are not types of their own.
+    const MessageKinds         kinds = find_message_kinds(read, frames, options.fields.min_frames);
+    std::vector<KindType>      built;
+    std::map<std::uint64_t, bool> taken;                 // sizes that are in a kind of several
+    for (std::size_t k = 0; k < kinds.kinds.size(); ++k) {
+        KindType kind;
+        if (build_kind(read, frames, kinds, k, options.fields, &kind)) {
+            built.push_back(kind);
+            for (std::size_t s = 0; s < kinds.kinds[k].sizes.size(); ++s) {
+                taken[kinds.kinds[k].sizes[s]] = true;
+            }
+        }
+    }
+
     std::map<std::uint64_t, std::uint64_t> by_size;      // frame size -> how many frames
     for (std::size_t i = 0; i < frames.frame_count(); ++i) {
         ++by_size[frame_size(read, frames.frame(i))];
     }
-    std::vector<std::pair<std::uint64_t, std::uint64_t> > types;   // (frames, size)
+    // Each type is (frames, smallest size, index in `built` or -1 for a size of its own).
+    std::vector<std::pair<std::pair<std::uint64_t, std::uint64_t>, std::int64_t> > types;
     for (std::map<std::uint64_t, std::uint64_t>::const_iterator it = by_size.begin();
          it != by_size.end(); ++it) {
-        if (it->second >= options.fields.min_frames && it->first > 0 &&
+        if (taken.count(it->first) == 0 && it->second >= options.fields.min_frames && it->first > 0 &&
             it->first <= std::numeric_limits<std::uint32_t>::max()) {
-            types.push_back(std::make_pair(it->second, it->first));
-        } else {
-            info.ignored_frames += it->second;
+            types.push_back(std::make_pair(std::make_pair(it->second, it->first), std::int64_t(-1)));
         }
     }
-    std::sort(types.begin(), types.end(), more_frequent);
+    for (std::size_t b = 0; b < built.size(); ++b) {
+        types.push_back(std::make_pair(std::make_pair(std::uint64_t(built[b].frames),
+                                                      std::uint64_t(built[b].smallest)),
+                                       static_cast<std::int64_t>(b)));
+    }
+    std::sort(types.begin(), types.end(), more_frequent_type);
+    std::uint64_t typed_frames = 0;
+    for (std::size_t t = 0; t < types.size(); ++t) {
+        typed_frames += types[t].first.first;
+    }
+    info.ignored_frames = frames.frame_count() - typed_frames;
 
     // What cut the frames is known when it was the flags or the gaps. A gap is
     // never 0 (the segmentation takes the shortest long one), so idle_gap_ns says
@@ -223,12 +394,24 @@ Analysis analyze_frames(const Capture& capture, const Segmentation& segmentation
 
     std::vector<MessageTypeReport> reports;
     for (std::size_t t = 0; t < types.size(); ++t) {
-        const std::uint32_t size = static_cast<std::uint32_t>(types[t].second);
+        if (types[t].second >= 0) {
+            const KindType& kind = built[static_cast<std::size_t>(types[t].second)];
+            MessageTypeReport report;
+            report.frame_bytes         = kind.smallest;
+            report.largest_frame_bytes = kind.largest;
+            report.frames              = kind.frames;
+            report.checksum            = kind.checksum;
+            add_kind_fields(&model, model.add_message_type("type" + number(t)), kind);
+            reports.push_back(report);
+            continue;
+        }
+        const std::uint32_t size = static_cast<std::uint32_t>(types[t].first.second);
 
         MessageTypeReport report;
-        report.frame_bytes = size;
-        report.frames      = static_cast<std::uint32_t>(types[t].first);
-        report.checksum    = find_checksum(read, frames, size);
+        report.frame_bytes         = size;
+        report.largest_frame_bytes = size;
+        report.frames              = static_cast<std::uint32_t>(types[t].first.first);
+        report.checksum            = find_checksum(read, frames, size);
 
         const FieldMap layout = discover_fields(read, frames, report.checksum, size, options.fields);
         const FieldMap typed  = type_fields(layout, read, frames);
@@ -287,8 +470,11 @@ std::string describe_analysis(const Analysis& analysis) {
     out += "\n";
     for (std::size_t t = 0; t < analysis.type_count(); ++t) {
         const MessageTypeReport r = analysis.type_report(t);
-        out += "type" + number(t) + "      " + number(r.frame_bytes) + " bytes, " + number(r.frames) +
-               " frames; " + checksum_line(r.checksum) + "\n";
+        out += "type" + number(t) + "      " + number(r.frame_bytes);
+        if (r.largest_frame_bytes > r.frame_bytes) {
+            out += " to " + number(r.largest_frame_bytes);
+        }
+        out += " bytes, " + number(r.frames) + " frames; " + checksum_line(r.checksum) + "\n";
     }
     return out + describe_model(analysis.model());
 }

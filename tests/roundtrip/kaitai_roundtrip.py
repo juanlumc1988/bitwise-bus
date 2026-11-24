@@ -9,7 +9,8 @@ of the capture. What it read, written back out as bytes with the types the
 definition says, has to be the frame, and the parser has to have used all of it.
 
 The frames are taken from the capture here, by what is known of how it was made
-(Modbus RTU: eight one-byte events), and not by the pipeline, so that the
+(Modbus RTU: eight one-byte events; MAVLink 2: a start byte, a length, and the
+length plus 12 in all), and not by the pipeline, so that the
 segmentation under test is not also the one that checks it.
 
 Needs: the `bitwise` binary, node and the compiler (npm: kaitai-struct-compiler),
@@ -191,6 +192,68 @@ def framed(bitwise, compiler, work):
     print("framed: a wrong constant is refused by the parser")
 
 
+def mcrf4xx(data, extra):
+    """CRC-16/MCRF4XX of the bytes and then of one byte more that is in no frame."""
+    crc = 0xFFFF
+    for byte in list(data) + [extra]:
+        crc ^= byte
+        for _ in range(8):
+            crc = (crc >> 1) ^ 0x8408 if crc & 1 else crc >> 1
+    return crc
+
+
+# MAVLink 2's CRC_EXTRA by message id: HEARTBEAT 0, SYS_STATUS 1, ATTITUDE 30, PROTOCOL_VERSION 300.
+MAVLINK2_EXTRA = {0: 50, 1: 124, 30: 39, 300: 217}
+
+
+def mavlink2(bitwise, compiler, work):
+    """Types of several sizes: a length, a payload that it sizes (`size: length`) and a CRC after it.
+
+    The frames are cut here by the length, and each is read by the definitions of every type: the
+    constants of the others refuse it, so it is read by exactly one, which has to use all of it, give
+    the same bytes back, and read as the CRC what the frame's own message id and CRC_EXTRA make it."""
+    for seed in (1, 3):
+        label = "mavlink2 seed %d" % seed
+        capture = run([bitwise, "synth", "mavlink2", "--seed", seed, "--frames", 300]).stdout
+        path = work / "mavlink2.csv"
+        path.write_text(capture)
+        data = b"".join(frames_of_capture(capture, 1))
+        frames, at = [], 0
+        while at < len(data):
+            size = data[at + 1] + 12
+            frames.append(data[at:at + size])
+            at += size
+        parsers = []
+        for index in range(8):
+            exported = run([bitwise, "export", path, "--type", index, "--id", "kind%d" % index])
+            if exported.returncode != 0:
+                break                              # no more types
+            parsers.append((exported.stdout,) + compile_ksy(exported.stdout, compiler, work))
+        check(len(parsers) == 4, "%s: %d types, not the 4 messages" % (label, len(parsers)))
+        sized = [text for text, _, _ in parsers if "size: length" in text]
+        # The messages whose payload was cut in the capture have two sizes or more: three in seed 3, two in seed 1.
+        expected = {1: 2, 3: 3}[seed]
+        check(len(sized) == expected, "%s: %d types have a payload that a length sizes, not %d" % (label, len(sized), expected))
+        used = 0
+        for number, frame in enumerate(frames):
+            readers = []
+            for text, definition, parser in parsers:
+                try:
+                    obj, consumed, rebuilt = read_back(definition, parser, frame)
+                except (kaitaistruct.KaitaiStructError, EOFError):
+                    continue
+                if consumed == len(frame) and obj._io.is_eof() and rebuilt == frame:
+                    readers.append(obj)
+            check(len(readers) == 1, "%s frame %d: read by %d types, not 1" % (label, number, len(readers)))
+            if len(readers) != 1:
+                continue
+            used += 1
+            msgid = frame[7] | frame[8] << 8 | frame[9] << 16
+            check(readers[0].checksum == mcrf4xx(frame[1:-2], MAVLINK2_EXTRA[msgid]),
+                  "%s frame %d: the checksum read is not the CRC with CRC_EXTRA of message %d" % (label, number, msgid))
+        print("%s: %d frames read back by %d types, %d with a sized payload" % (label, used, len(parsers), len(sized)))
+
+
 def mapping(compiler, work):
     """Every kind of field the exporter writes, from the definition checked in."""
     text = (HERE / "mapping.ksy").read_text()
@@ -222,6 +285,7 @@ def main():
         work = pathlib.Path(tmp)
         modbus(args.bitwise, args.compiler, work)
         framed(args.bitwise, args.compiler, work)
+        mavlink2(args.bitwise, args.compiler, work)
         mapping(args.compiler, work)
     if FAILURES:
         print("%d check(s) failed" % len(FAILURES))

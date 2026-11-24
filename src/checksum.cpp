@@ -9,6 +9,7 @@
 
 #include "bw/catalog.h"
 #include "bw/crc_search.h"
+#include "bw/messages.h"
 #include "bw/sums.h"
 
 namespace bw {
@@ -175,11 +176,19 @@ std::vector<SumHit> search_sums(const std::vector<Frame>& frames, const SearchOp
 
 ChecksumFinding find_checksum(const Capture& capture, const Segmentation& segmentation,
                               std::uint32_t size_bytes) {
-    std::vector<Frame> frames;
+    std::vector<std::vector<std::uint8_t> > bytes;
     const std::vector<FrameSpan> spans = frames_of_size(capture, segmentation, size_bytes);
     for (std::size_t i = 0; i < spans.size(); ++i) {
+        bytes.push_back(frame_bytes(capture, spans[i]));
+    }
+    return find_checksum_of_frames(bytes);
+}
+
+ChecksumFinding find_checksum_of_frames(const std::vector<std::vector<std::uint8_t> >& given) {
+    std::vector<Frame> frames;
+    for (std::size_t i = 0; i < given.size(); ++i) {
         Frame frame;
-        frame.bytes = frame_bytes(capture, spans[i]);
+        frame.bytes = given[i];
         frames.push_back(frame);
     }
 
