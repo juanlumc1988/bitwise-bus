@@ -31,7 +31,7 @@ int usage() {
         "\n"
         "usage:\n"
         "  bitwise crc-catalog\n"
-        "  bitwise crc-find FILE [FILE...] [--header-skip N] [--trailer-skip N]\n"
+        "  bitwise crc-find FILE [FILE...] [--header-skip N] [--trailer-skip N] [--hidden-byte]\n"
         "  bitwise capture-info FILE\n"
         "  bitwise protocols [NAME]\n"
         "  bitwise synth NAME [--seed N] [--frames N] [--jitter-permille N]\n"
@@ -402,6 +402,15 @@ int cmd_catalog() {
     return 0;
 }
 
+// Two hexadecimal digits.
+std::string hex_byte(unsigned value) {
+    static const char digits[] = "0123456789ABCDEF";
+    std::string       out;
+    out += digits[(value >> 4) & 15];
+    out += digits[value & 15];
+    return out;
+}
+
 int cmd_find(const std::vector<std::string>& paths,
              const bw::SearchOptions& options) {
     if (paths.empty()) {
@@ -427,6 +436,12 @@ int cmd_find(const std::vector<std::string>& paths,
     std::printf("%zu frames, %zu algorithms x %zu layouts tried\n\n",
                 report.frames, report.specs_tried, report.layouts_tried);
 
+    if (options.hidden_byte && report.distinct_frames < 3) {
+        std::printf("A byte that is in no frame is only worth looking for in three\n"
+                    "different frames or more, of the same kind of message: with\n"
+                    "fewer, almost any CRC fits some value of it.\n\n");
+    }
+
     if (report.candidates.empty()) {
         std::printf("No CRC in the catalogue explains these frames.\n\n"
                     "That could mean the checksum is not a catalogued CRC, or\n"
@@ -435,14 +450,20 @@ int cmd_find(const std::vector<std::string>& paths,
         return 1;
     }
 
-    std::printf("%-20s %-6s %-8s %-8s %s\n",
-                "algorithm", "width", "header", "trailer", "byte order");
+    std::printf("%-20s %-6s %-8s %-8s %-14s%s\n",
+                "algorithm", "width", "header", "trailer", "byte order",
+                options.hidden_byte ? " hidden byte" : "");
     for (std::size_t i = 0; i < report.candidates.size(); ++i) {
         const bw::Candidate& c = report.candidates[i];
-        std::printf("%-20s %-6u %-8zu %-8zu %s\n",
+        char hidden[16] = "";
+        if (options.hidden_byte) {
+            std::snprintf(hidden, sizeof(hidden), " %s",
+                          c.seeded ? ("0x" + hex_byte(c.seed)).c_str() : "-");
+        }
+        std::printf("%-20s %-6u %-8zu %-8zu %-14s%s\n",
                     c.spec->name, c.layout.width, c.layout.header_skip,
                     c.layout.trailer_skip,
-                    c.layout.big_endian ? "big-endian" : "little-endian");
+                    c.layout.big_endian ? "big-endian" : "little-endian", hidden);
     }
 
     if (report.truncated) {
@@ -512,6 +533,8 @@ int main(int argc, char** argv) {
             options.max_header_skip = (std::size_t)std::strtoul(argv[++i], nullptr, 10);
         } else if (arg == "--trailer-skip" && has_value) {
             options.max_trailer_skip = (std::size_t)std::strtoul(argv[++i], nullptr, 10);
+        } else if (arg == "--hidden-byte") {
+            options.hidden_byte = true;
         } else if (!arg.empty() && arg[0] == '-') {
             std::fprintf(stderr, "bitwise: unknown option '%s'\n", arg.c_str());
             return usage();

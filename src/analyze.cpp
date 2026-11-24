@@ -37,6 +37,15 @@ FieldInfo info_of(const FieldRegion& region) {
     return info;
 }
 
+// The algorithm, and the hidden byte if there is one: "CRC-16/MCRF4XX seeded with 50".
+std::string checksum_name(const ChecksumFinding& c) {
+    std::string name = checksum_algorithm_name(c.algorithm);
+    if (c.seeded) {
+        name += " seeded with " + number(c.seed);
+    }
+    return name;
+}
+
 // Adds the fields of a typed map to a message type of the model.
 void add_fields(Model* model, std::size_t type, const FieldMap& fields,
                 const ChecksumFinding& checksum) {
@@ -64,7 +73,7 @@ void add_fields(Model* model, std::size_t type, const FieldMap& fields,
             info.covers_first = first;
             info.covers_last  = last;
             name              = "checksum";
-            detail            = checksum_algorithm_name(checksum.algorithm);
+            detail            = checksum_name(checksum);
         } else if (region.kind == FieldKind::Counter) {
             detail = "step " + number(region.step);
         }
@@ -87,7 +96,7 @@ std::string checksum_line(const ChecksumFinding& c) {
                         : number(c.width_bits) + " bits" +
                               (c.byte_order == ByteOrder::Big ? " big-endian"
                                : c.byte_order == ByteOrder::Little ? " little-endian" : "");
-        return "checksum " + checksum_algorithm_name(c.algorithm) + ", " + form +
+        return "checksum " + checksum_name(c) + ", " + form +
                ", evidence " + number(c.evidence_bits) + " bits";
     }
     if (c.candidates == 0) {

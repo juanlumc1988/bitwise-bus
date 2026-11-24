@@ -32,7 +32,7 @@ $ xxd frame0.bin
 00000000: 1103 a54d ca18 2530 bb1d ebb6            ..M..%0....
 
 $ bitwise crc-find frame*.bin
-6 frames, 17 algorithms x 450 layouts tried
+6 frames, 63 algorithms x 1569 layouts tried
 
 algorithm            width  header   trailer  byte order
 CRC-16/MODBUS        16     0        0        little-endian
@@ -219,6 +219,10 @@ bitwise crc-find FILE [FILE...]     work out which one a set of frames uses
                                     the covered range (default 4)
     --trailer-skip N                how many bytes may follow the checksum
                                     (default 2)
+    --hidden-byte                   also try each CRC with one more byte after
+                                    what it covers that is in no frame (MAVLink's
+                                    CRC_EXTRA): give it frames of one kind of
+                                    message, three different ones or more
 bitwise capture-info FILE           a first look at a capture file: events,
                                     channels, directions, timing
 bitwise protocols [NAME]            the known protocols, or the model of one
@@ -304,11 +308,11 @@ each other at the pace of the line, but a flag byte bounds each frame, and `anal
 them there, reads them without the flags and with the stuffing undone, and finds the FCS of
 PPP. UBX and MAVLink follow one another with nothing between them and have no flag, but each
 frame starts with a sync byte and says how long it is, and `analyze` cuts them there. What it
-makes of them next is limited by what the later stages do not know yet: the checksum of
-MAVLink (a CRC with a seed that is not in the frame), and the frames of MAVLink 2
-that differ in length for the same message because the zeros at the end of a payload are not
-sent. The Fletcher-8 of UBX is found, and so are the sums of one byte, also when they are written as two
-hexadecimal characters. NMEA
+makes of them next is limited by what the later stages do not know yet: the frames of
+MAVLink 2 that differ in length for the same message because the zeros at the end of a
+payload are not sent. The Fletcher-8 of UBX is found, and so are the sums of one byte, also
+when they are written as two hexadecimal characters, and the CRC of MAVLink, with the byte of
+each message that is not in the frame. NMEA
 sentences are text, and come three at a time with a second of silence after them: the gaps
 find the seconds, and `analyze` cuts them into lines, which are the sentences; they differ in
 length, and the exclusive-or checksum, written as two hexadecimal characters after the star,

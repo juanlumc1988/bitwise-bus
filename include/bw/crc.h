@@ -51,6 +51,14 @@ u64 width_mask(u8 width);
 
 u64 crc_compute(const CrcSpec& spec, const u8* data, std::size_t len);
 
+// A CRC in progress: crc_compute is these three in a row, and a split anywhere
+// gives the same answer. A search that appends one more byte to bytes it has
+// already fed, 256 times over, feeds them once and ends the CRC 256 times.
+// A spec of a width that is not 1 to 64 gives 0 at the end, as crc_compute does.
+u64 crc_begin(const CrcSpec& spec);
+u64 crc_feed(const CrcSpec& spec, u64 state, const u8* data, std::size_t len);
+u64 crc_end(const CrcSpec& spec, u64 state);
+
 // Confirms a spec against its own published check value. A catalogue entry
 // that fails this is mistyped, and a mistyped entry in a search space is
 // worse than a missing one: it will never match anything, and nobody will

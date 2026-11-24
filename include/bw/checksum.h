@@ -19,6 +19,11 @@
 // be told apart. The evidence of a checksum written as text is the 8 bits it
 // holds, not the 16 it takes.
 //
+// A CRC with a hidden byte (MAVLink's CRC_EXTRA) is looked for only when
+// nothing else explains the frames: the byte is eight more bits of freedom, so
+// what it finds is worth eight bits less, and the same byte has to hold for
+// all of the frames, which are those of one kind of message.
+//
 // Only frames of one size are searched at a time. A checksum sits at a place
 // that depends on the frame's length, and a message type is, for now, a size.
 
@@ -51,6 +56,8 @@ struct ChecksumFinding {
     std::uint32_t width_bits     = 0;       // on the wire: 16 for one written as two characters
     ByteOrder     byte_order     = ByteOrder::NotApplicable;
     bool          ascii_hex      = false;   // written as hexadecimal text, big-endian
+    bool          seeded         = false;   // a CRC over what it covers and one byte that is not in the frame
+    std::uint32_t seed           = 0;       //   (MAVLink's CRC_EXTRA): the value of that byte
     std::uint32_t algorithm      = 0;       // index: the catalogue of CRCs first, then the sums
 };
 

@@ -12,6 +12,9 @@ namespace {
 // header for where the number comes from.
 const u32 kConfidentEvidenceBits = 32;
 
+// The bits a hidden byte is worth to a search that may choose it: the value it was free to take.
+const u64 kHiddenByteBits = 8;
+
 // A CRC whose polynomial is a multiple of a narrower one's, with neither init nor final xor, leaves the
 // narrower one's CRC in its own bytes: over the frame less its last byte, CRC-16/LJ1200 (0x6F63) is explained
 // by CRC-8/GSM-A (0x1D) as well, and CRC-64/ECMA-182 by CRC-16/UMTS. The narrower CRC says nothing the
@@ -20,6 +23,10 @@ const u32 kConfidentEvidenceBits = 32;
 bool is_part_of(const Candidate& part, const Candidate& whole) {
     const Layout& p = part.layout;
     const Layout& w = whole.layout;
+    // The hidden byte, if there is one, is in both or it is not the same finding.
+    if (part.seeded != whole.seeded || (part.seeded && part.seed != whole.seed)) {
+        return false;
+    }
     return p.header_skip == w.header_skip && p.width < w.width &&
            p.trailer_skip >= w.trailer_skip &&
            p.trailer_skip + p.field_bytes() <= w.trailer_skip + w.field_bytes();
@@ -97,6 +104,48 @@ bool verify(const std::vector<Frame>& frames, const Layout& layout,
     return true;
 }
 
+std::vector<u8> hidden_bytes(const std::vector<Frame>& frames, const Layout& layout,
+                             const CrcSpec& spec) {
+    std::vector<u8> fitting;
+    if (frames.empty() || spec.width != layout.width) {
+        return fitting;
+    }
+    for (std::size_t f = 0; f < frames.size(); ++f) {
+        const std::size_t len = frames[f].bytes.size();
+        if (!layout.fits(len)) {
+            return std::vector<u8>();
+        }
+    }
+
+    // For the first frame, every byte; for the others, only those left. The covered bytes are fed
+    // once for each frame, and the one more byte is all that is done for each value.
+    for (int value = 0; value < 256; ++value) {
+        fitting.push_back(static_cast<u8>(value));
+    }
+    for (std::size_t f = 0; f < frames.size() && !fitting.empty(); ++f) {
+        const Frame&      frame = frames[f];
+        const std::size_t begin = layout.covered_begin();
+        const std::size_t end   = layout.covered_end(frame.bytes.size());
+        const u64         state = crc_feed(spec, crc_begin(spec), frame.bytes.data() + begin, end - begin);
+        const u64         field = extract_checksum(frame, layout);
+
+        std::vector<u8> left;
+        for (std::size_t i = 0; i < fitting.size(); ++i) {
+            if (crc_end(spec, crc_feed(spec, state, &fitting[i], 1)) == field) {
+                left.push_back(fitting[i]);
+            }
+        }
+        fitting = left;
+    }
+    return fitting;
+}
+
+u32 candidate_evidence(const Candidate& candidate, std::size_t distinct_frames) {
+    const u64 bits = static_cast<u64>(distinct_frames) * candidate.layout.width;
+    const u64 free = candidate.seeded ? kHiddenByteBits : 0;
+    return static_cast<u32>(bits > free ? bits - free : 0);
+}
+
 bool SearchReport::confident() const {
     return unique() && evidence_bits >= kConfidentEvidenceBits;
 }
@@ -164,16 +213,28 @@ SearchReport search(const std::vector<Frame>& frames,
                     }
                     ++report.layouts_tried;
 
-                    if (!verify(frames, layout, spec)) {
-                        continue;
+                    // The CRC as it is, and then with a hidden byte, if asked for.
+                    std::vector<Candidate> matches;
+                    Candidate              found;
+                    found.spec   = &spec;
+                    found.layout = layout;
+                    if (verify(frames, layout, spec)) {
+                        matches.push_back(found);
                     }
-                    if (report.candidates.size() < options.max_candidates) {
-                        Candidate found;
-                        found.spec   = &spec;
-                        found.layout = layout;
-                        report.candidates.push_back(found);
-                    } else {
-                        report.truncated = true;
+                    if (options.hidden_byte) {
+                        const std::vector<u8> seeds = hidden_bytes(frames, layout, spec);
+                        for (std::size_t k = 0; k < seeds.size(); ++k) {
+                            found.seeded = true;
+                            found.seed   = seeds[k];
+                            matches.push_back(found);
+                        }
+                    }
+                    for (std::size_t k = 0; k < matches.size(); ++k) {
+                        if (report.candidates.size() < options.max_candidates) {
+                            report.candidates.push_back(matches[k]);
+                        } else {
+                            report.truncated = true;
+                        }
                     }
                 }
             }
@@ -192,22 +253,18 @@ SearchReport search(const std::vector<Frame>& frames,
     }
     report.candidates = whole;
 
-    // Evidence is measured against the narrowest checksum that matched --
-    // the weakest claim among the candidates -- and counts DISTINCT frames.
+    // Evidence is measured against the weakest claim among the candidates
+    // (the narrowest checksum, or one with a byte it was free to choose), and
+    // counts DISTINCT frames.
     //
     // Identical frames are one observation repeated, not several. A capture
     // of a device sending the same heartbeat forty times carries exactly as
     // much evidence as one heartbeat, and counting it forty times would
     // manufacture confidence out of nothing. Captures like that are the
     // normal case on a quiet bus, not an edge case.
-    if (!report.candidates.empty()) {
-        u8 narrowest = 64;
-        for (std::size_t i = 0; i < report.candidates.size(); ++i) {
-            if (report.candidates[i].layout.width < narrowest) {
-                narrowest = report.candidates[i].layout.width;
-            }
-        }
-        report.evidence_bits = static_cast<u32>(report.distinct_frames) * narrowest;
+    for (std::size_t i = 0; i < report.candidates.size(); ++i) {
+        const u32 bits = candidate_evidence(report.candidates[i], report.distinct_frames);
+        report.evidence_bits = (i == 0 || bits < report.evidence_bits) ? bits : report.evidence_bits;
     }
     return report;
 }

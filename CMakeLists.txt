@@ -192,7 +192,7 @@ if(BW_BUILD_TESTS)
         "time_ns,channel.*0,uart,,,fd.*173611,uart,,,[0-9a-f][0-9a-f]")
     add_test(NAME cli_protocols_mavlink2 COMMAND bitwise protocols mavlink2)
     set_tests_properties(cli_protocols_mavlink2 PROPERTIES PASS_REGULAR_EXPRESSION
-        "message type 3 \"protocol_version\".*\"message_id\" +constant +24 bits @56 little-endian = 0x12C.*\"payload\" +payload +sized by field 1.*CRC_EXTRA 217")
+        "message type 3 \"protocol_version\".*\"message_id\" +constant +24 bits @56 little-endian = 0x12C.*\"payload\" +payload +sized by field 1.*seeded with 217")
     add_test(NAME cli_synth_nmea0183 COMMAND bitwise synth nmea0183 --seed 1 --frames 1)
     set_tests_properties(cli_synth_nmea0183 PROPERTIES PASS_REGULAR_EXPRESSION
         "time_ns,channel.*0,uart,,,24.*2083333,uart,,,47.*4166666,uart,,,50")
@@ -204,7 +204,7 @@ if(BW_BUILD_TESTS)
         "framing: contiguous, nothing between frames.*message type 0 \"ack_ack\".*message type 2 \"nav_status\".*\"checksum\" +checksum +16 bits @[0-9]+ little-endian covers 2..11 FLETCHER-8")
     add_test(NAME cli_protocols_mavlink1 COMMAND bitwise protocols mavlink1)
     set_tests_properties(cli_protocols_mavlink1 PROPERTIES PASS_REGULAR_EXPRESSION
-        "message type 1 \"sys_status\".*\"crc\" +checksum.*CRC-16/MCRF4XX seeded with CRC_EXTRA 124")
+        "message type 1 \"sys_status\".*\"crc\" +checksum.*CRC-16/MCRF4XX seeded with 124")
     add_test(NAME cli_synth_slip COMMAND bitwise synth slip --seed 1 --frames 2)
     set_tests_properties(cli_synth_slip PROPERTIES PASS_REGULAR_EXPRESSION
         "time_ns,channel.*0,uart,,,c0.*86805,uart,,,20.*173610,uart,,,00")
@@ -251,11 +251,11 @@ if(BW_BUILD_TESTS)
     add_test(NAME cli_analyze_mavlink1
         COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_mavlink1_seed1_30frames.csv)
     set_tests_properties(cli_analyze_mavlink1 PROPERTIES PASS_REGULAR_EXPRESSION
-        "framing +sync byte 0xFE, frame size = the 1-byte length at offset 1 plus 8 \\(0 breaks in the chain\\).*frames +30.*type0 +39 bytes, 11 frames")
+        "framing +sync byte 0xFE, frame size = the 1-byte length at offset 1 plus 8 \\(0 breaks in the chain\\).*frames +30.*type0 +39 bytes, 11 frames; checksum CRC-16/MCRF4XX seeded with 124, 16 bits little-endian, evidence 168 bits.*type1 +36 bytes, 10 frames; checksum CRC-16/MCRF4XX seeded with 39, 16 bits little-endian, evidence 152 bits.*type2 +17 bytes, 9 frames; checksum CRC-16/MCRF4XX seeded with 50")
     add_test(NAME cli_analyze_mavlink2
         COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_mavlink2_seed1_30frames.csv)
     set_tests_properties(cli_analyze_mavlink2 PROPERTIES PASS_REGULAR_EXPRESSION
-        "framing +sync byte 0xFD, frame size = the 1-byte length at offset 1 plus 12 \\(0 breaks in the chain\\).*frames +30 \\(5 of a size too rare.*type0 +43 bytes, 7 frames")
+        "framing +sync byte 0xFD, frame size = the 1-byte length at offset 1 plus 12 \\(0 breaks in the chain\\).*frames +30 \\(5 of a size too rare.*type0 +43 bytes, 7 frames; checksum CRC-16/MCRF4XX seeded with 124, 16 bits little-endian, evidence 104 bits.*type3 +40 bytes, 6 frames; checksum CRC-16/MCRF4XX seeded with 39")
     # And on the one of text, whose sentences end with a line feed, with a second of silence after three.
     add_test(NAME cli_analyze_nmea0183
         COMMAND bitwise analyze ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/synth_nmea0183_seed3_9frames_jitter300.csv)

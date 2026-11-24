@@ -160,7 +160,7 @@ public:
             crc.covers_first = 1;                                               // from the length
             crc.covers_last  = static_cast<std::uint32_t>(last);
             model.add_field(t, "crc", crc,
-                            "CRC-16/MCRF4XX seeded with CRC_EXTRA " + std::to_string(kMessages[m].crc_extra));
+                            "CRC-16/MCRF4XX seeded with " + std::to_string(kMessages[m].crc_extra));
         }
         return model;
     }

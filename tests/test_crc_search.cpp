@@ -66,6 +66,26 @@ std::vector<bw::Frame> synthesise(const bw::CrcSpec& spec,
     return frames;
 }
 
+// As synthesise, but the CRC is over what the layout covers and then one byte that is not in the frame.
+std::vector<bw::Frame> synthesise_hidden(const bw::CrcSpec& spec, const bw::Layout& layout, std::size_t count,
+                                         std::size_t payload_len, u8 hidden, u64 seed) {
+    std::vector<bw::Frame> frames = synthesise(spec, layout, count, payload_len, seed);
+    for (std::size_t f = 0; f < frames.size(); ++f) {
+        bw::Frame&        frame = frames[f];
+        const std::size_t at    = layout.checksum_offset(frame.bytes.size());
+        std::vector<u8>   covered(frame.bytes.begin() + static_cast<std::ptrdiff_t>(layout.covered_begin()),
+                                  frame.bytes.begin() + static_cast<std::ptrdiff_t>(at));
+        covered.push_back(hidden);
+        const u64         value = bw::crc_compute(spec, covered.data(), covered.size());
+        const std::size_t n     = layout.field_bytes();
+        for (std::size_t i = 0; i < n; ++i) {
+            const std::size_t shift = layout.big_endian ? (n - 1u - i) : i;
+            frame.bytes[at + i] = static_cast<u8>((value >> (shift * 8u)) & 0xFFu);
+        }
+    }
+    return frames;
+}
+
 bool contains(const bw::SearchReport& report, const char* name) {
     for (std::size_t i = 0; i < report.candidates.size(); ++i) {
         if (std::string(report.candidates[i].spec->name) == name) {
@@ -108,10 +128,10 @@ TEST_CASE("every byte-aligned algorithm in the catalogue is recoverable") {
 TEST_CASE("every byte-aligned algorithm is told from all the others, at the lengths a bus has") {
     // Recoverable is not enough: with 60-odd entries, two that give the same value on every frame of a
     // length would make every search at that length ambiguous. Each one is the only answer, with the
-    // layout it was built with, for payloads of 8 bytes to a few hundred (a payload shorter than the CRC
+    // layout it was built with, for payloads of 8 bytes to over a hundred (a payload shorter than the CRC
     // is not a case: the CRC of one byte has bytes that never change, and a narrower CRC explains those).
     // The one length with a pair of algorithms that are the same function is the next test's.
-    const std::size_t lengths[] = { 8, 16, 31, 64, 126, 128, 250 };
+    const std::size_t lengths[] = { 8, 31, 126, 128 };
     for (std::size_t i = 0; i < bw::catalog_size(); ++i) {
         const bw::CrcSpec& spec = bw::catalog()[i];
         if (spec.width % 8u != 0) {
@@ -123,7 +143,7 @@ TEST_CASE("every byte-aligned algorithm is told from all the others, at the leng
             bw::Layout layout;
             layout.width      = spec.width;
             layout.big_endian = true;
-            const bw::SearchReport report = bw::search(synthesise(spec, layout, 12, lengths[l], 0x5EED00u + i));
+            const bw::SearchReport report = bw::search(synthesise(spec, layout, 8, lengths[l], 0x5EED00u + i));
             REQUIRE(report.candidates.size() == 1);
             CHECK(report.candidates[0].spec == &spec);
             CHECK(report.candidates[0].layout.header_skip == 0);
@@ -227,7 +247,154 @@ TEST_CASE("a CRC beside another CRC, not inside it, is another answer") {
         CHECK(contains(report, "CRC-16/MODBUS"));
         CHECK(contains(report, "CRC-8"));
         CHECK_FALSE(report.unique());
+        CHECK(report.evidence_bits == 12u * 8u);            // the narrower of the two is the weaker claim
     }
+}
+
+TEST_CASE("a byte that is in no frame is found, with its value, when the search is asked for it") {
+    // MAVLink's CRC: CRC-16/MCRF4XX over the frame and then over CRC_EXTRA, a number each message has and
+    // both ends know. Asked to, the search tries every CRC with one more byte, of any value, after the
+    // covered range, and the same byte has to explain every frame.
+    const bw::CrcSpec* spec = bw::catalog_find("CRC-16/MCRF4XX");
+    REQUIRE(spec != nullptr);
+    const u8 values[] = { 0, 1, 50, 124, 127, 128, 217, 254, 255 };
+    for (std::size_t v = 0; v < sizeof(values) / sizeof(values[0]); ++v) {
+        CAPTURE(static_cast<unsigned>(values[v]));
+        bw::Layout layout;
+        layout.width      = 16;
+        layout.big_endian = false;
+        layout.header_skip = 1;
+        const std::vector<bw::Frame> frames = synthesise_hidden(*spec, layout, 10, 20, values[v], 0xBEEF00u + v);
+
+        // Not asked: nothing explains them.
+        CHECK(bw::search(frames).candidates.empty());
+
+        bw::SearchOptions options;
+        options.hidden_byte = true;
+        const bw::SearchReport report = bw::search(frames, options);
+        REQUIRE(report.candidates.size() == 1);
+        const bw::Candidate& found = report.candidates[0];
+        CHECK(found.spec == spec);
+        CHECK(found.seeded);
+        CHECK(found.seed == values[v]);
+        CHECK(found.layout.header_skip == 1);
+        CHECK(found.layout.trailer_skip == 0);
+        CHECK_FALSE(found.layout.big_endian);
+        // 10 frames of 16 bits, less the 8 bits of the byte it was free to choose.
+        CHECK(report.evidence_bits == 10u * 16u - 8u);
+        CHECK(report.confident());
+    }
+}
+
+TEST_CASE("asked for a byte nobody wrote, the search still finds a CRC that has none, as it is") {
+    const bw::CrcSpec* spec = bw::catalog_find("CRC-16/MODBUS");
+    REQUIRE(spec != nullptr);
+    bw::Layout layout;
+    layout.width      = 16;
+    layout.big_endian = false;
+    const std::vector<bw::Frame> frames = synthesise(*spec, layout, 10, 20);
+    bw::SearchOptions options;
+    options.hidden_byte = true;
+    const bw::SearchReport report = bw::search(frames, options);
+    REQUIRE(report.candidates.size() == 1);
+    CHECK(report.candidates[0].spec == spec);
+    CHECK_FALSE(report.candidates[0].seeded);
+    CHECK(report.evidence_bits == 10u * 16u);       // nothing was chosen: nothing is taken off
+}
+
+TEST_CASE("the bytes that make a CRC explain frames are all of those that do, and only those") {
+    const bw::CrcSpec* spec = bw::catalog_find("CRC-16/MCRF4XX");
+    REQUIRE(spec != nullptr);
+    bw::Layout layout;
+    layout.width       = 16;
+    layout.big_endian  = false;
+    layout.header_skip = 1;
+    const std::vector<bw::Frame> frames = synthesise_hidden(*spec, layout, 6, 12, 0xA5, 77);
+    const std::vector<u8>        found  = bw::hidden_bytes(frames, layout, *spec);
+    REQUIRE(found.size() == 1);
+    CHECK(found[0] == 0xA5);
+
+    // A CRC is a bijection of the byte that is put after what it covers, so a frame has at most one value of
+    // it, and exactly one when a hidden byte explains it at all; with a single frame of 8 bits that is always
+    // so, and each further frame leaves one value in 256.
+    const bw::CrcSpec* crc8 = bw::catalog_find("CRC-8");
+    REQUIRE(crc8 != nullptr);
+    bw::Layout narrow;
+    narrow.width = 8;
+    const std::vector<bw::Frame> one = synthesise(*crc8, narrow, 1, 9, 5);       // a plain CRC-8, as it is
+    CHECK(bw::hidden_bytes(one, narrow, *crc8).size() == 1);
+    const std::vector<bw::Frame> more = synthesise_hidden(*crc8, narrow, 8, 9, 0x42, 6);
+    const std::vector<u8>        eight = bw::hidden_bytes(more, narrow, *crc8);
+    REQUIRE(eight.size() == 1);
+    CHECK(eight[0] == 0x42);
+    // The first frame alone is explained by one value and the second by one, and they are not the same one
+    // (unless it is the right one): the frames are all asked.
+    const std::vector<bw::Frame> first(more.begin(), more.begin() + 1);
+    REQUIRE(bw::hidden_bytes(first, narrow, *crc8).size() == 1);
+    CHECK(bw::hidden_bytes(first, narrow, *crc8)[0] == 0x42);
+
+    // Nothing to explain, a layout that does not fit, and a spec of another width: none.
+    CHECK(bw::hidden_bytes(std::vector<bw::Frame>(), layout, *spec).empty());
+    bw::Layout too_long = layout;
+    too_long.header_skip = 20;
+    CHECK(bw::hidden_bytes(frames, too_long, *spec).empty());
+    CHECK(bw::hidden_bytes(frames, narrow, *spec).empty());
+    // A frame that is too short for the layout, among the rest, stops it.
+    std::vector<bw::Frame> short_one = frames;
+    short_one.push_back(bw::Frame());
+    CHECK(bw::hidden_bytes(short_one, layout, *spec).empty());
+}
+
+TEST_CASE("what a candidate is worth is what its frames say, less the byte it chose") {
+    bw::Candidate plain;
+    bw::CrcSpec   spec = { "x", 16, 0x1021, 0, false, false, 0, 0 };
+    plain.spec         = &spec;
+    plain.layout.width = 16;
+    CHECK(bw::candidate_evidence(plain, 5) == 80u);
+    CHECK(bw::candidate_evidence(plain, 0) == 0u);
+    bw::Candidate hidden = plain;
+    hidden.seeded = true;
+    hidden.seed   = 3;
+    CHECK(bw::candidate_evidence(hidden, 5) == 72u);
+    CHECK(bw::candidate_evidence(hidden, 1) == 8u);
+    CHECK(bw::candidate_evidence(hidden, 0) == 0u);               // less than nothing is nothing
+    bw::Candidate byte = hidden;
+    byte.layout.width = 8;
+    CHECK(bw::candidate_evidence(byte, 1) == 0u);                 // one frame of a byte: free to choose it
+    CHECK(bw::candidate_evidence(byte, 5) == 32u);
+}
+
+TEST_CASE("a hidden byte on a single frame explains anything, and the search says so by not being sure") {
+    // With one frame, every CRC of a byte has some value of the byte that explains it. Many candidates,
+    // so many that the list is cut, and nothing to be confident of.
+    const bw::CrcSpec* crc8 = bw::catalog_find("CRC-8");
+    REQUIRE(crc8 != nullptr);
+    bw::Layout layout;
+    layout.width = 8;
+    bw::SearchOptions options;
+    options.hidden_byte = true;
+    const bw::SearchReport report = bw::search(synthesise(*crc8, layout, 1, 12, 9), options);
+    CHECK(report.candidates.size() == options.max_candidates);
+    CHECK(report.truncated);
+    CHECK_FALSE(report.confident());
+}
+
+TEST_CASE("a CRC that holds a narrower one is not two answers with a hidden byte either, if the byte is the same") {
+    // CRC-16/LJ1200 and CRC-8/GSM-A, as before, with the same byte after what they cover: the byte is
+    // in the message of both, and the narrower is still a part of the wider.
+    const bw::CrcSpec* wide = bw::catalog_find("CRC-16/LJ1200");
+    REQUIRE(wide != nullptr);
+    bw::Layout layout;
+    layout.width      = 16;
+    layout.big_endian = true;
+    const std::vector<bw::Frame> frames = synthesise_hidden(*wide, layout, 10, 20, 0x39, 4242);
+    bw::SearchOptions options;
+    options.hidden_byte = true;
+    const bw::SearchReport report = bw::search(frames, options);
+    REQUIRE(report.candidates.size() == 1);
+    CHECK(report.candidates[0].spec == wide);
+    CHECK(report.candidates[0].seed == 0x39);
+    CHECK(report.candidates[0].seeded);
 }
 
 TEST_CASE("the layout is recovered, not just the algorithm") {

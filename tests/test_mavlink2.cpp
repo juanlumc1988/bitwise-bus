@@ -140,7 +140,7 @@ TEST_CASE("mavlink2: its model is the documented one") {
         CHECK(crc.kind == FieldKind::Checksum);
         CHECK(crc.covers_first == 1);                                 // from the length
         CHECK(crc.covers_last == 8);                                  // to the end of the payload
-        CHECK(m.field_detail(t, 9) == "CRC-16/MCRF4XX seeded with CRC_EXTRA " + std::to_string(extras[t]));
+        CHECK(m.field_detail(t, 9) == "CRC-16/MCRF4XX seeded with " + std::to_string(extras[t]));
     }
 }
 
@@ -341,7 +341,8 @@ TEST_CASE("mavlink2: the decoder refuses each way a frame can be wrong") {
 TEST_CASE("mavlink2 baseline: no gaps to cut at, and sizes that are not message types") {
     // Where this protocol starts: by gaps nothing is found, as with MAVLink 1. Given the true frames, they are grouped
     // by size, and the same message has several sizes because its payload is cut: seven sizes for four messages
-    // in this capture (seed 3, 300 frames), and no checksum, as for MAVLink 1.
+    // in this capture (seed 3, 300 frames). In each size the CRC is found, with the byte of its message that the
+    // frames do not hold (CRC_EXTRA: 50, 124, 39 or 217), as for MAVLink 1.
     const Dataset d = make(3, 300);
     CHECK_FALSE(bw::segment_by_gaps(d.capture(), bw::SegmentationOptions()).info().found);
 
@@ -351,6 +352,16 @@ TEST_CASE("mavlink2 baseline: no gaps to cut at, and sizes that are not message 
     CHECK(a.type_count() == 7);
     CHECK(a.info().ignored_frames == 0);
     for (std::size_t t = 0; t < a.type_count(); ++t) {
-        CHECK_FALSE(a.type_report(t).checksum.found);
+        const bw::ChecksumFinding& c = a.type_report(t).checksum;
+        CAPTURE(t);
+        REQUIRE(c.found);
+        CHECK(bw::checksum_algorithm_name(c.algorithm) == "CRC-16/MCRF4XX");
+        CHECK(c.seeded);
+        CHECK((c.seed == 50 || c.seed == 124 || c.seed == 39 || c.seed == 217));
+        CHECK(c.header_skip == 1);              // the start byte is not covered
+        CHECK(c.trailer_skip == 0);
+        CHECK(c.width_bits == 16);
+        CHECK(c.byte_order == bw::ByteOrder::Little);
+        CHECK(c.evidence_bits >= 32);
     }
 }

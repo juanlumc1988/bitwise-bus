@@ -316,10 +316,24 @@ later, and several will lean on code written for Track A.
      holds CRC-16/UMTS) is one answer and not two, as with the sums; and
      CRC-8/AUTOSAR and CRC-8/OPENSAFETY are the same function for payloads of
      127 bytes (x has order 127 modulo their polynomial), so there the search
-     rightly says it cannot tell. The rest, in the order it is likely to go in: a
-     CRC with a hidden seed byte (MAVLink's CRC_EXTRA), which needs the frames
-     grouped by message id and so belongs partly to stage 4. Modbus ASCII's LRC is
-     over the bytes that its hexadecimal text stands for, which is wave 2;
+     rightly says it cannot tell. (c) Done: a CRC over what it covers and one byte
+     more that is not in the frame (MAVLink's CRC_EXTRA: a number each message has
+     and both ends know), searched with every CRC of the catalogue and any value of
+     the byte (`SearchOptions::hidden_byte`, with `crc_begin`, `crc_feed` and
+     `crc_end` in `bw/crc.h` so that the covered bytes are fed once and the byte
+     tried 256 times). The byte is eight more bits of freedom, so what it finds is
+     worth eight bits less (`candidate_evidence`), and stage 2 only looks for it
+     when nothing else explains the frames and there are three different ones or
+     more (with one, every CRC of a byte has a value that fits). It finds
+     CRC-16/MCRF4XX with 50, 124 and 39 in the three kinds of MAVLink 1, and in
+     all seven sizes of MAVLink 2. What it does not do: the frames of one size are
+     taken to be of one message, so a size that two messages share would mix two
+     bytes (the grouping by message id is stage 4), the byte is only looked for
+     after the covered range, and the CRCs of a byte that differ only in the
+     initial value or the final xor cannot be told apart once a byte is free to
+     make up the difference (CRC-8 and CRC-8/I-432-1: two candidates). The rest:
+     Modbus ASCII's LRC is over the bytes that its hexadecimal text stands for,
+     which is wave 2;
   6. stages 4 and 5: length fields, fields of varying size, text, and the
      numbers of two bytes whose high byte never changes.
 - **Versions.** A minor version once the skeleton works, and one per completed
@@ -346,9 +360,9 @@ field with the position and size of a true one, `kind` also its kind. Pinned by
 | UBX ACK-ACK | none | exact | 2 candidates | 8 / 10 | 9 / 11 / 9 | 6 | 5 |
 | UBX CFG-RATE | none | exact | Fletcher-8 | 9 / 13 | 10 / 14 / 10 | 5 | 5 |
 | UBX NAV-STATUS | none | exact | Fletcher-8 | 13 / 21 | 14 / 22 / 14 | 9 | 6 |
-| MAVLink 1 HEARTBEAT | none | exact | none | 13 / 16 | 14 / 17 / 14 | 12 | 8 |
-| MAVLink 1 SYS_STATUS | none | exact | none | 20 / 37 | 21 / 38 / 20 | 6 | 4 |
-| MAVLink 1 ATTITUDE | none | exact | none | 14 / 23 | 15 / 24 / 15 | 7 | 4 |
+| MAVLink 1 HEARTBEAT | none | exact | CRC-16/MCRF4XX seeded with 50 | 13 / 16 | 14 / 17 / 14 | 12 | 9 |
+| MAVLink 1 SYS_STATUS | none | exact | CRC-16/MCRF4XX seeded with 124 | 20 / 38 | 21 / 39 / 21 | 8 | 6 |
+| MAVLink 1 ATTITUDE | none | exact | CRC-16/MCRF4XX seeded with 39 | 14 / 23 | 15 / 24 / 15 | 7 | 5 |
 
 The checksum column is stage 2, searching the CRCs of the catalogue and the sums
 that are not CRCs (`bw/sums.h`). UBX's Fletcher-8 is found in two of its three
@@ -357,7 +371,10 @@ and in the same two kinds of the 30 frames of the corpus. ACK-ACK has 3 differen
 frames among its 60, and the same bytes are explained by Fletcher-8 and by
 Fletcher-16, which differ only when a sum reaches 255: with 48 bits of evidence
 and two candidates it says it cannot tell, and that is the right answer. MAVLink's
-CRC has a seed that nothing in the frame holds, so it is none.
+CRC has a seed that nothing in the frame holds, the byte of each message, and is
+found in all three messages with that byte (50, 124 and 39), as the truth says
+it: `checksum_match` is true. The CRC is a field of its own to stage 4, so every
+message gains a field of the right kind, and SYS_STATUS gains two exact fields.
 
 The first of the two frame columns is stage 3 by gaps, which finds nothing in a
 capture whose frames follow one another with nothing between them; the second is
@@ -372,7 +389,8 @@ payload is cut of its trailing zeros, so one message has frames of several
 sizes. Its sync byte is 0xFD and the length is at offset 1 plus 12, and the
 frames are found exactly. On 300 frames of seed 3 the true frames of the four
 messages have seven sizes, and the stages, which group by size, make seven message
-types of them; no checksum.
+types of them; the CRC is found in all seven, with the byte of its message (50, 124,
+39 or 217).
 
 NMEA 0183 is of another kind and has its own baseline, on 90 sentences of
 seed 3: by gaps, 30 frames are found where there are 90, none of them a true
@@ -580,6 +598,20 @@ the reason the README gives for `rewind-mcu`.
   catalogue (the five sums, and an error after them), and Modbus RTU, PPP and
   MAVLink 1 as before. `bw/sums.h` is not bound: nothing in it is needed from a
   binding that `checksum_algorithm_name` does not say.
+
+  **After the hidden byte** (`ChecksumFinding` gets `seeded` and `seed`; `bw/crc.h`
+  gets `crc_begin`, `crc_feed` and `crc_end`, and `bw/crc_search.h` the option, two
+  fields of `Candidate`, `hidden_bytes` and `candidate_evidence`) it was the same
+  once more for the headers of the skeleton: the same 45 files, no change to the
+  annotations, and the two new fields in the dataclasses. The first step is
+  unchanged in what it says: the headers of the CRC stage, as they are, are
+  rejected, with 28 errors on `main` and 37 with these declarations, nine more of
+  the same kinds (aliases, a pointer, a vector of an alias), none new. From Python,
+  17 checks pass: the CRC of MAVLink 1 in its three types with 50, 124 and 39 (the
+  bytes of its messages, and not in the frames), the line of `describe_analysis`,
+  the detail in the model, the Kaitai export, all seven sizes of MAVLink 2, and
+  Modbus RTU, UBX, NMEA, PPP and SLIP as before (a CRC that has no byte is not
+  said to have one, and SLIP, which has no checksum, has no candidates).
 
   Not tried: any platform other than Linux x86-64, threads, callbacks and
   directors, large captures, Python versions other than 3.13. To repeat the
