@@ -2,7 +2,7 @@
 # Part of bitwise-bus -- inferring undocumented bus protocols from captures.
 
 cmake_minimum_required(VERSION 3.16)
-project(bitwise-bus VERSION 0.2.0 LANGUAGES CXX)
+project(bitwise-bus VERSION 1.0.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -84,6 +84,7 @@ endif()
 
 add_executable(bitwise tools/main.cpp)
 target_link_libraries(bitwise PRIVATE bw_core)
+target_compile_definitions(bitwise PRIVATE BW_VERSION="${PROJECT_VERSION}")
 bw_configure(bitwise)
 
 # A binary that runs without the toolchain's own runtime libraries next to it.
@@ -120,7 +121,7 @@ configure_package_config_file(cmake/bitwise-bus-config.cmake.in
     INSTALL_DESTINATION ${BW_CMAKE_DIR})
 write_basic_package_version_file(
     ${CMAKE_CURRENT_BINARY_DIR}/bitwise-bus-config-version.cmake
-    COMPATIBILITY SameMinorVersion)   # 0.x: a minor bump may break the API
+    COMPATIBILITY SameMajorVersion)   # 1.x: no break in the API (docs/api.md)
 install(FILES
     ${CMAKE_CURRENT_BINARY_DIR}/bitwise-bus-config.cmake
     ${CMAKE_CURRENT_BINARY_DIR}/bitwise-bus-config-version.cmake
@@ -159,11 +160,20 @@ if(BW_BUILD_TESTS)
         tests/test_messages.cpp
         tests/test_synthetic.cpp
         tests/test_text.cpp
-        tests/test_synthetic_text.cpp)
+        tests/test_synthetic_text.cpp
+        tests/test_api.cpp)
     target_include_directories(bw_tests PRIVATE tests/third_party)
+    # The headers that are installed, to check that docs/api.md says what each one is.
+    file(GLOB BW_HEADER_FILES CONFIGURE_DEPENDS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}/include/bw
+         ${CMAKE_CURRENT_SOURCE_DIR}/include/bw/*.h)
+    list(SORT BW_HEADER_FILES)
+    list(JOIN BW_HEADER_FILES " " BW_HEADER_LIST)
     target_compile_definitions(bw_tests PRIVATE
         "BW_CORPUS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus\""
-        "BW_ROUNDTRIP_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/roundtrip\"")
+        "BW_ROUNDTRIP_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/roundtrip\""
+        "BW_DOCS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/docs\""
+        "BW_PUBLIC_HEADERS=\"${BW_HEADER_LIST}\""
+        "BW_PROJECT_VERSION=\"${PROJECT_VERSION}\"")
     target_link_libraries(bw_tests PRIVATE bw_core)
     bw_configure(bw_tests)
 
@@ -176,6 +186,10 @@ if(BW_BUILD_TESTS)
         COMMAND bitwise capture-info ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/modbus_rtu_two_requests.csv)
     set_tests_properties(cli_capture_info PROPERTIES PASS_REGULAR_EXPRESSION
         "events +16 \\(16 bytes\\).*channels +1: rs485 \\(16\\).*intervals +15 between timed events: min 1145833 ns, median 1145833 ns, max 11145833 ns")
+
+    # The version is the project's, which the package script and the release tag are checked against.
+    add_test(NAME cli_version COMMAND bitwise --version)
+    set_tests_properties(cli_version PROPERTIES PASS_REGULAR_EXPRESSION "^bitwise ${PROJECT_VERSION}")
 
     # Each of these reads the output of the real program. A pattern only has to say
     # that the right thing came out; the exact bytes are checked by the unit tests.

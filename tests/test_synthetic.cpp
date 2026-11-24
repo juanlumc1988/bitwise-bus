@@ -737,13 +737,23 @@ TEST_CASE("synthetic sweep: thousands of protocols, with the line as it is and w
         char label[64];
         std::snprintf(label, sizeof(label), "corrupt %u, lose %u", corrupt[k], lose[k]);
         print(label, m);
-        // Measured over 1500 protocols: frames 1.0000, 0.9949, 1.0000 and 0.9748; the checksum 0.9976, 0.9782, 0.9971 and
-        // 0.9124 of those that the frames can show, none wrong but 2 in 3710 in the last, none where there is none;
-        // boundaries 0.90, 0.90, 0.91, 0.89.
+        // The baseline, over 1500 protocols (docs/roadmap.md), and the threshold that is pinned, which is kept a few points
+        // below it so that a sweep of 300 protocols, or of 3000, passes by the same margin:
+        //
+        //                     frames          checksum right   wrong            boundaries      exact fields
+        //   line as it is     1.000  >= 0.999   0.998 >= 0.99    0     <= 0.001   0.903 >= 0.87   0.691 >= 0.65
+        //   1 in 50 wrong     0.995  >= 0.99    0.978 >= 0.96    0     <= 0.001   0.901 >= 0.87   0.682 >= 0.65
+        //   1 in 20 lost      1.000  >= 0.999   0.997 >= 0.99    0     <= 0.001   0.905 >= 0.87   0.691 >= 0.65
+        //   both              0.975  >= 0.96    0.912 >= 0.88    0.0005 <= 0.005  0.892 >= 0.86   0.666 >= 0.62
+        //
+        // and none where there is none, whatever the line.
+        const double bounds_at[4] = { 0.87, 0.87, 0.87, 0.86 };
+        const double fields_at[4] = { 0.65, 0.65, 0.65, 0.62 };
         CHECK(m.spurious == 0);
         CHECK(ratio(m.wrong, m.eligible) <= (k == 3 ? 0.005 : 0.001));
         CHECK(ratio(m.right, m.eligible) >= (k == 0 || k == 2 ? 0.99 : k == 1 ? 0.96 : 0.88));
-        CHECK(ratio(m.hit_bounds, m.truth_bounds) >= 0.85);
+        CHECK(ratio(m.hit_bounds, m.truth_bounds) >= bounds_at[k]);
+        CHECK(ratio(m.exact_fields, m.truth_fields) >= fields_at[k]);
         CHECK(ratio(m.exact_frames, m.truth_frames) >= (k == 0 || k == 2 ? 0.999 : k == 1 ? 0.99 : 0.96));
         if (k == 0 || k == 2) {
             CHECK(m.exact_protocols == m.protocols);

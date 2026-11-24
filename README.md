@@ -5,13 +5,22 @@
 Infer undocumented bus protocols from captures. The command it builds is
 `bitwise`.
 
-**Status: early.** The whole pipeline now runs end to end on synthetic Modbus
-RTU captures: `bitwise analyze` cuts a capture into frames at the long gaps,
-finds the checksum and splits the frames into typed fields, and `bitwise
-export` writes what it found as a Kaitai Struct definition. Every stage is a
-first version, the simplest thing that can work, to be deepened one at a time;
-and none has met a real capture yet. See
-[What this does not do yet](#what-this-does-not-do-yet) and the
+**Status: 1.0.** The pipeline runs end to end. `bitwise analyze` cuts a capture
+into frames (at the long gaps, at flags with byte stuffing, from a sync byte and a
+length, or as lines of text), finds the checksum (66 CRCs, five sums, in bytes or as
+text, with a byte that is in no frame), puts the frames into message types and splits
+them into typed fields (constants, enumerations, counters, floats, lengths, text,
+payload), each claim with its evidence in bits; and `bitwise export` writes what it
+found as a Kaitai Struct definition. The API is frozen for 1.x
+([docs/api.md](docs/api.md)).
+
+**It has only ever met synthetic captures**: those of six protocols with a generator
+(Modbus RTU, UBX, MAVLink 1 and 2, NMEA 0183, SLIP and PPP), thousands made up from a
+seed, and noise put on them, all with a known answer to score against, and the
+published test vectors of the CRCs. No real capture has gone through it, and what the
+numbers in this document say is what it does on those, not on a bus. An answer on a real
+capture is a hypothesis with its evidence, to be checked against what the device is
+known to do. See [What this does not do yet](#what-this-does-not-do-yet) and the
 [roadmap](docs/roadmap.md).
 
 ## The problem
@@ -164,7 +173,7 @@ To use the library from CMake, point `CMAKE_PREFIX_PATH` at the unpacked
 directory:
 
 ```cmake
-find_package(bitwise-bus 0.2 CONFIG REQUIRED)
+find_package(bitwise-bus 1 CONFIG REQUIRED)
 target_link_libraries(my_tool PRIVATE bw::core)
 ```
 
@@ -179,8 +188,10 @@ MSVC).
   link-compatible under MSVC; `find_package` picks the right one.
 - **Linux** binaries are built on Ubuntu 22.04, so the CLI needs glibc 2.35 or
   newer and nothing else. **macOS** needs 11 or newer.
-- Before 1.0 the API can change between minor versions, so
-  `find_package(bitwise-bus 0.2 ...)` accepts 0.2.x only.
+- **Versions.** From 1.0 the API follows semantic versioning, so
+  `find_package(bitwise-bus 1 ...)` accepts any 1.x; what is frozen, and what
+  is not (what the pipeline infers is not), is in [docs/api.md](docs/api.md).
+  `bitwise --version` prints the version.
 
 ## Build and test
 
@@ -213,8 +224,9 @@ to a microcontroller, nothing here ever leaves a workstation.
 ## Commands
 
 ```console
+bitwise --version                   the version of the program
 bitwise crc-catalog                 list the algorithms that will be tried
-bitwise crc-find FILE [FILE...]     work out which one a set of frames uses
+bitwise crc-find FRAME [FRAME...]   work out which one a set of frames uses
     --header-skip N                 how many leading bytes may sit outside
                                     the covered range (default 4)
     --trailer-skip N                how many bytes may follow the checksum
@@ -223,7 +235,7 @@ bitwise crc-find FILE [FILE...]     work out which one a set of frames uses
                                     what it covers that is in no frame (MAVLink's
                                     CRC_EXTRA): give it frames of one kind of
                                     message, three different ones or more
-bitwise capture-info FILE           a first look at a capture file: events,
+bitwise capture-info CAPTURE        a first look at a capture file: events,
                                     channels, directions, timing
 bitwise protocols [NAME]            the known protocols, or the model of one
 bitwise synth NAME                  a synthetic capture of a known protocol, or of
@@ -238,13 +250,13 @@ bitwise synth NAME                  a synthetic capture of a known protocol, or 
                                     byte changed, 0 to 1000 (default 0)
     --lose-permille N               ...and how many are not in the capture,
                                     0 to 1000 (default 0)
-bitwise analyze FILE                infer the protocol of a capture file
+bitwise analyze CAPTURE             infer the protocol of a capture file
     --min-gap-ratio N               how many times longer the gaps between
                                     frames must be than those inside one
                                     (default 3)
     --min-frames N                  fewest frames of a size to say anything
                                     about it (default 4)
-bitwise export FILE                 the inferred protocol as a Kaitai Struct
+bitwise export CAPTURE              the inferred protocol as a Kaitai Struct
                                     definition, on standard output
     --format kaitai                 the only format so far
     --type N                        which message type, from 0 (default 0)
@@ -253,10 +265,10 @@ bitwise export FILE                 the inferred protocol as a Kaitai Struct
     --min-gap-ratio N, --min-frames N   as for analyze
 ```
 
-For `crc-find`, each `FILE` is one captured frame, raw bytes. `capture-info`
-reads the capture format described in
+For `crc-find`, each `FRAME` is one captured frame, raw bytes. The other commands
+read a `CAPTURE`, the format described in
 [docs/capture-format.md](docs/capture-format.md): a plain CSV with one row per
-event, which is what the later stages of the pipeline will read.
+event, which is what the pipeline reads.
 
 `synth` needs no hardware: it writes a capture of a protocol the project knows,
 with a known answer, which is also what the tests of every stage are scored
@@ -316,34 +328,31 @@ its own, and nothing in the capture says it belongs with the byte after it.
 Random bytes at the same timing come out as one payload field and no checksum;
 without timing there is no framing and it says so.
 
-Six protocols of the first wave of the corpus (UBX, MAVLink 1 and MAVLink 2,
-binary; NMEA 0183, text; SLIP and PPP in HDLC-like framing, byte stuffing) are there to
-be generated, and `analyze` makes more of them as the stages come. SLIP and PPP follow
-each other at the pace of the line, but a flag byte bounds each frame, and `analyze` cuts
-them there, reads them without the flags and with the stuffing undone, and finds the FCS of
-PPP. UBX and MAVLink follow one another with nothing between them and have no flag, but each
-frame starts with a sync byte and says how long it is, and `analyze` cuts them there. What it
-makes of them next is limited by what the later stages do not know yet: the frames of
-MAVLink 2 that differ in length for the same message because the zeros at the end of a
-payload are not sent. The Fletcher-8 of UBX is found, and so are the sums of one byte, also
-when they are written as two hexadecimal characters, and the CRC of MAVLink, with the byte of
-each message that is not in the frame. NMEA
-sentences are text, and come three at a time with a second of silence after them: the gaps
-find the seconds, and `analyze` cuts them into lines, which are the sentences; they differ in
-length, and the exclusive-or checksum, written as two hexadecimal characters after the star,
-is found in each kind. The three kinds of sentence are three message types, whose fields are the
-dollar, the address, what is between each pair of commas (a constant when it never changes,
-and else text up to the comma), the checksum and the line end, as many as the protocol has, and
-`export` writes them as Kaitai strings with a terminator. That is the
-starting point of the next steps of the [roadmap](docs/roadmap.md), measured in its table of
-the baseline.
+Six protocols are there to be generated and analysed (`bitwise protocols`): Modbus RTU,
+UBX, MAVLink 1 and MAVLink 2, binary; NMEA 0183, text; and SLIP and PPP in HDLC-like
+framing, with byte stuffing. `analyze` finds how each is framed: Modbus RTU by its gaps;
+SLIP and PPP by the flag byte that bounds each frame, reading them without the flags and
+with the stuffing undone, which is how the FCS of PPP is found; UBX and MAVLink, which
+follow one another with nothing between them, by a sync byte and the length that each frame
+says it has; and NMEA, which comes three sentences at a time with a second of silence after
+them (the gaps find the seconds), in lines, which are the sentences. It finds the checksum
+of each: the CRCs, the Fletcher-8 of UBX, the sums of one byte also when they are written as
+two hexadecimal characters, and the CRC of MAVLink with the byte of each message that is not
+in the frame. And it finds the message types: the frames of MAVLink 2 that differ in length
+for one message (the zeros at the end of a payload are not sent) are one type, with a length
+and a payload that it sizes, and the three kinds of NMEA sentence are three types, whose
+fields are the dollar, the address, what is between each pair of commas (a constant when it
+never changes, and else text up to the comma), the checksum and the line end, as many as
+the protocol has; `export` writes them as Kaitai strings with a terminator. What it finds
+in each of them, and in thousands made up from a seed, is measured in the tables of the
+[roadmap](docs/roadmap.md).
 
 ## What this does not do yet
 
-What follows is where the library stops today, and, for most of it, where it will
-stop at 1.0 (the [roadmap](docs/roadmap.md) says which is which). It has been
-tested on synthetic captures with a known answer and on published test vectors,
-and on nothing else: there are no real captures in it.
+What follows is where the library stops at 1.0 (the [roadmap](docs/roadmap.md) says
+what was left out, and why). It has been tested on synthetic captures with a known
+answer and on published test vectors, and on nothing else: there are no real captures
+in it.
 
 - **Frame segmentation** cuts at the long gaps, at flags (with their byte
   stuffing), from a sync byte by the length the frame says it has, and in lines of
@@ -421,14 +430,16 @@ separator), protocols made up from a seed, of bytes and of text, and noise on th
 try all of it on thousands of cases (and read what a line that is not perfect leaves),
 and the Kaitai Struct exporter, checked with the real Kaitai tools.
 
-**What is left for 1.0**, in one pull request: the closing of the API, the
-thresholds and the release.
+**This is 1.0.** The plan ends here: nothing more is promised, and the
+[roadmap](docs/roadmap.md) keeps what was left out as ideas, not as a plan.
 
 **Not planned:** numbers that are only small, numbers in text, more protocols with a
-name, a Wireshark dissector, DBC, live capture, bit-level framing, a Qt viewer, and
-real captures. The library has only
-been tested on synthetic captures with a known answer and on published test vectors,
-and that is as far as this goes.
+name, a Wireshark dissector, DBC, live capture, bit-level framing and a Qt viewer. The
+author has no way to make a real capture, so the library has only been tested on
+synthetic ones with a known answer and on published test vectors, and that is as far as
+this goes. Real captures are welcome (see the
+[corpus](docs/roadmap.md#the-synthetic-corpus)), and what they show is what a later
+version would be built from.
 
 ## Relationship to rewind-mcu
 

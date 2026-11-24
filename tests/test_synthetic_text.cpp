@@ -400,6 +400,26 @@ TEST_CASE("text sweep: thousands of protocols of text, with the line as it is an
         char label[64];
         std::snprintf(label, sizeof(label), "corrupt %u, lose %u", corrupt[k], lose[k]);
         print(label, c);
+        // The baseline, over 1000 protocols (docs/roadmap.md), and the threshold that is pinned, a few points below it
+        // so that a sweep of 300 protocols, or of 3000, passes by the same margin:
+        //
+        //                     frames          types            checksum right   fields           strays / types
+        //   line as it is     0.999 >= 0.998  1.000 >= 0.998   0.994 >= 0.985   0.995 >= 0.985   0     == 0
+        //   1 in 50 wrong     0.997 >= 0.995  1.000 >= 0.998   0.988 >= 0.97    0.991 >= 0.975   0.003 <= 0.01
+        //   1 in 20 lost      0.999 >= 0.998  1.000 >= 0.998   0.994 >= 0.985   0.995 >= 0.985   0     == 0
+        //   both              0.993 >= 0.985  0.998 >= 0.995   0.965 >= 0.94    0.975 >= 0.95    0.031 <= 0.05
+        //
+        // and no checksum where there is none, whatever the line.
+        const double frames_at[4]  = { 0.998, 0.995, 0.998, 0.985 };
+        const double types_at[4]   = { 0.998, 0.998, 0.998, 0.995 };
+        const double right_at[4]   = { 0.985, 0.97, 0.985, 0.94 };
+        const double fields_at[4]  = { 0.985, 0.975, 0.985, 0.95 };
+        const double strays_at[4]  = { 0.0, 0.01, 0.0, 0.05 };
         CHECK(c.spurious == 0);
+        CHECK(ratio(c.exact_frames, c.truth_frames) >= frames_at[k]);
+        CHECK(ratio(c.paired, c.truth_types) >= types_at[k]);
+        CHECK(ratio(c.right, c.eligible) >= right_at[k]);
+        CHECK(ratio(c.same_fields, c.shaped) >= fields_at[k]);
+        CHECK(ratio(c.strays, c.paired) <= strays_at[k]);
     }
 }
