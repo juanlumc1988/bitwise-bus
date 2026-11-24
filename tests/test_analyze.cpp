@@ -474,9 +474,9 @@ TEST_CASE("wave 1 baseline: with the true frames, what the stages find in UBX an
     // in 60, which Fletcher-8 and Fletcher-16 (the same sums, modulo 255) explain alike, so there it
     // says it cannot tell.
     // Stage 4 finds every boundary there is, and some more, because a number of two bytes with a high
-    // byte that never changes is two fields to it; and stage 5 types what it can see. The numbers are
-    // those of 200 frames of seed 3, and each step of wave 1 that improves one of them changes this
-    // table in the same pull request.
+    // byte that never changes is two fields to it; and stage 5 types what it can see, and puts together
+    // the bytes of a counter of several bytes and of a float. The numbers are those of 200 frames of
+    // seed 3, and each step that improves one of them changes this table in the same pull request.
     struct Row {
         const char*   protocol;
         const char*   type;
@@ -487,10 +487,10 @@ TEST_CASE("wave 1 baseline: with the true frames, what the stages find in UBX an
     const Row rows[] = {
         { "ubx",      "ack_ack",    8,  10, 9,  11, 9,  6,  5, 2, false },
         { "ubx",      "cfg_rate",   9,  13, 10, 14, 10, 5,  5, 1, true },
-        { "ubx",      "nav_status", 13, 21, 14, 22, 14, 9,  6, 1, true },
+        { "ubx",      "nav_status", 13, 17, 14, 18, 14, 11, 6, 1, true },
         { "mavlink1", "heartbeat",  13, 16, 14, 17, 14, 12, 9, 1, true },
         { "mavlink1", "sys_status", 20, 38, 21, 39, 21, 8,  6, 1, true },
-        { "mavlink1", "attitude",   14, 23, 15, 24, 15, 7,  5, 1, true },
+        { "mavlink1", "attitude",   14, 17, 15, 18, 15, 13, 11, 1, true },
     };
     const char* protocols[2] = { "ubx", "mavlink1" };
     std::size_t checked = 0;

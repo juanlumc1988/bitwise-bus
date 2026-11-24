@@ -97,6 +97,37 @@ struct KindType {
     std::uint32_t            frames   = 0;
 };
 
+// The fields of bytes [from, to) of the frames, read as frames of their own: stages 4 and 5 over them, with the
+// offsets of the whole frame; nothing when there are no bytes. The frames are those of a kind, which has at least
+// the frames that each of its sizes needs, so there is always something to claim.
+void type_part(const std::vector<std::vector<std::uint8_t> >& bytes, std::size_t from, std::size_t to,
+               const FieldOptions& options, std::vector<FieldRegion>* regions) {
+    if (from == to) {
+        return;
+    }
+    Capture                part;
+    std::vector<FrameSpan> spans;
+    for (std::size_t i = 0; i < bytes.size(); ++i) {
+        part.add_event(EventInfo(), std::vector<std::uint8_t>(bytes[i].begin() + static_cast<std::ptrdiff_t>(from),
+                                                              bytes[i].begin() + static_cast<std::ptrdiff_t>(to)));
+        FrameSpan span;
+        span.first_event = i;
+        span.event_count = 1;
+        spans.push_back(span);
+    }
+    SegmentationInfo info;
+    info.found = true;
+    const Segmentation whole(info, spans);
+    const FieldMap     layout = discover_fields(part, whole, ChecksumFinding(), static_cast<std::uint32_t>(to - from),
+                                                options);
+    const FieldMap typed = type_fields(layout, part, whole);
+    for (std::size_t i = 0; i < typed.region_count(); ++i) {
+        FieldRegion region = typed.region(i);
+        region.byte_offset += static_cast<std::uint32_t>(from);
+        regions->push_back(region);
+    }
+}
+
 // Tries to make one message type of a kind. It needs a checksum that explains the frames of all of its
 // sizes (the same, with the same hidden byte: evidence that they are one kind and not several that
 // share a discriminator), because where the payload starts is the length constant less what comes after
@@ -137,56 +168,37 @@ bool build_kind(const Capture& read, const Segmentation& frames, const MessageKi
     // is the first payload_start bytes, is in all of them.
     const std::uint64_t payload_start = static_cast<std::uint64_t>(length.adjust) - after;
 
-    // The header, as frames of their own, which stage 4 and 5 read like any others.
-    Capture                header;
-    std::vector<FrameSpan> spans;
-    for (std::size_t i = 0; i < bytes.size(); ++i) {
-        header.add_event(EventInfo(), std::vector<std::uint8_t>(bytes[i].begin(),
-                         bytes[i].begin() + static_cast<std::ptrdiff_t>(payload_start)));
-        FrameSpan span;
-        span.first_event = i;
-        span.event_count = 1;
-        spans.push_back(span);
-    }
-    SegmentationInfo info;
-    info.found = true;
-    const Segmentation whole(info, spans);
-    const FieldMap     layout = discover_fields(header, whole, ChecksumFinding(),
-                                                static_cast<std::uint32_t>(payload_start), options);
-    if (layout.region_count() == 0) {
+    // The header, as frames of their own, which stage 4 and 5 read like any others. The length is a field of its
+    // own, of all of its bytes, and nothing is put together across it (a length next to the zeros of some flags is
+    // not a number of two bytes, nor is the byte before it a part of it), so what is before the length and what is
+    // after it are read apart. A length that reaches into the payload leaves no header to hold it.
+    const std::uint64_t length_end = static_cast<std::uint64_t>(length.offset) + length.bytes;
+    if (length_end > payload_start) {
         return false;
     }
-    const FieldMap typed = type_fields(layout, header, whole);
+    std::vector<FieldRegion> head;                       // before the length
+    std::vector<FieldRegion> rest;                       // after it, up to the payload
+    type_part(bytes, 0, length.offset, options, &head);
+    type_part(bytes, static_cast<std::size_t>(length_end), static_cast<std::size_t>(payload_start), options, &rest);
+    FieldRegion length_region;
+    length_region.byte_offset = length.offset;
+    length_region.byte_size   = length.bytes;
+    length_region.kind        = FieldKind::Length;
+    out->header               = head;
+    out->length_field         = out->header.size();
+    out->header.push_back(length_region);
+    out->header.insert(out->header.end(), rest.begin(), rest.end());
 
-    // The length is a field of its own, of all of its bytes: stage 4 sees bytes, and a length of two comes out
-    // as two, which are put together when they are the length and nothing else. A run of bytes with no structure
-    // that goes across an end of the length (a length with many values, next to a counter) leaves some of its bytes
-    // uncounted, and then the type has no length to be sized by. What the checksum covers has to start at a field.
-    bool          first_found = checksum.header_skip == payload_start;
-    std::uint32_t absorbed    = 0;
-    bool          length_made = false;
-    out->first_covered        = typed.region_count();      // the payload, if that is where it starts
-    for (std::size_t i = 0; i < typed.region_count(); ++i) {
-        FieldRegion         region = typed.region(i);
-        const std::uint32_t end    = region.byte_offset + region.byte_size;
-        const bool          inside = region.byte_offset >= length.offset && end <= length.offset + length.bytes;
-        if (inside) {
-            absorbed += region.byte_size;
-            if (length_made) {
-                continue;
-            }
-            region.byte_offset = length.offset;
-            region.byte_size   = length.bytes;
-            out->length_field  = out->header.size();
-            length_made        = true;
-        }
-        if (region.byte_offset == checksum.header_skip) {
-            out->first_covered = out->header.size();
+    // What the checksum covers has to start at a field: the payload, if that is where it starts, or one of the header.
+    bool first_found   = checksum.header_skip == payload_start;
+    out->first_covered = out->header.size();
+    for (std::size_t i = 0; i < out->header.size(); ++i) {
+        if (out->header[i].byte_offset == checksum.header_skip) {
+            out->first_covered = i;
             first_found        = true;
         }
-        out->header.push_back(region);
     }
-    if (absorbed != length.bytes || !first_found) {
+    if (!first_found) {
         return false;
     }
     out->checksum = checksum;

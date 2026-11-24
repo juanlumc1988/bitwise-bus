@@ -342,11 +342,12 @@ and on nothing else: there are no real captures in it.
   taken as one field. Fields smaller than a byte are not handled, a number of
   several bytes whose high bytes never change comes out as several fields, and text
   of varying size is not split into fields.
-- **Field typing** claims constants, enumerations, counters and, in a type of
+- **Field typing** claims constants, enumerations, counters (of up to eight
+  bytes, in either byte order, with the step) and 32-bit floats and, in a type of
   several sizes, the length, with the evidence for each in bits, and calls
-  everything else payload without claiming anything. Timestamps, floats, text and
-  flags are not recognised, and neither are counters that span bytes which
-  discovery has already cut apart.
+  everything else payload without claiming anything. Flags, text, 64-bit floats and
+  numbers that are small (a byte with zeros next to it, which could as well be a
+  byte and some flags) are not recognised.
 - **Non-byte-aligned checksum fields.** `crc_compute` handles 15-, 17- and
   21-bit widths correctly, and the catalogue includes CAN and CAN-FD. But
   *locating* such a field in a capture needs bit-level framing, so
@@ -371,15 +372,17 @@ The plan is short on purpose; the detail is in [docs/roadmap.md](docs/roadmap.md
 stuffing, a sync byte and a length, lines of text), the checksum stage (66 CRCs,
 five sums, checksums written as text, a CRC with a byte that is in no frame), message
 types by discriminator, field discovery and typing for the six protocols of the
-corpus, and the Kaitai Struct exporter, checked with the real Kaitai tools.
+corpus (with counters of several bytes and floats put together), and the Kaitai
+Struct exporter, checked with the real Kaitai tools.
 
-**What is left for 1.0**, in three pull requests: the fields that are still wrong
-(numbers of two or three bytes with a constant high byte, lengths, text), a
-parametric generator of protocol shapes with noise to test the generality that six
-named protocols cannot, and the closing of the API, the thresholds and the release.
+**What is left for 1.0**, in two pull requests: a parametric generator of protocol
+shapes with noise to test the generality that six named protocols cannot, and the
+closing of the API, the thresholds and the release.
 
-**Not planned:** more protocols with a name, a Wireshark dissector, DBC, live
-capture, bit-level framing, a Qt viewer, and real captures. The library has only
+**Not planned:** splitting text into fields (NMEA 0183 is framed and its checksum
+found, its fields are not), numbers that are only small, more protocols with a
+name, a Wireshark dissector, DBC, live capture, bit-level framing, a Qt viewer, and
+real captures. The library has only
 been tested on synthetic captures with a known answer and on published test vectors,
 and that is as far as this goes.
 

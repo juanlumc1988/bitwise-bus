@@ -3,9 +3,9 @@
 //
 // Stages 4 and 5: where are the fields of a message, and what are they?
 //
-// A message type is, for now, a frame size: the frames of one size are looked
-// at together, byte offset by byte offset. (What tells message types apart
-// within a size, and frames of varying length, are for later: docs/roadmap.md.)
+// These work on frames of one size, looked at together byte offset by byte
+// offset. (A message type that has frames of several sizes is made from several
+// such sizes by analyze(), with the help of bw/messages.h.)
 //
 // Stage 4, discover_fields, splits the frame into regions. Each byte offset is
 // classed by how many distinct values it takes over the frames: one (a
@@ -17,9 +17,18 @@
 // where its coverage begins and ends are boundaries.
 //
 // Stage 5, type_fields, says what each region is: a Constant with its value, an
-// Enum, a Counter (successive frames differ by the same non-zero step) or a
-// Payload, the answer for anything else, which claims nothing. Every claim
-// carries its evidence in bits, on the same footing as the CRC stage's.
+// Enum, a Counter (successive frames differ by the same non-zero step), a Float
+// (four bytes that are in the range of a measurement in nearly all the frames and
+// whose low bytes of mantissa vary as a measurement's do) or a Payload, the
+// answer for anything else, which claims nothing. Every claim carries its
+// evidence in bits, on the same footing as the CRC stage's.
+//
+// Stage 4 sees bytes, so a number of several bytes comes out in pieces; stage 5
+// puts the pieces of a Counter (of up to eight bytes, with the constant bytes on
+// top that bring it to four or eight) or a Float together into one region when
+// the bytes, as a number, show it. Bytes that are only small numbers (a byte that
+// varies with zeros next to it) are not put together: it could be a byte and some
+// flags.
 //
 // With few frames nothing is claimed at all: fewer than min_frames and the map
 // has no regions.
@@ -102,8 +111,10 @@ FieldMap discover_fields(const Capture& capture, const Segmentation& segmentatio
                          const ChecksumFinding& checksum, std::uint32_t size_bytes,
                          const FieldOptions& options);
 
-// Stage 5. The same regions with their kinds, from the same capture and
-// segmentation. A region that already has a kind (the checksum) keeps it.
+// Stage 5. The regions with their kinds, from the same capture and segmentation:
+// those of the layout, except that the regions that make up a Counter or a Float
+// are one (so there may be fewer, and they tile the frame all the same). A region
+// that already has a kind (the checksum) keeps it, and is not put into a number.
 // Throws std::invalid_argument if the layout is not of the frames these give.
 FieldMap type_fields(const FieldMap& layout, const Capture& capture,
                      const Segmentation& segmentation);
