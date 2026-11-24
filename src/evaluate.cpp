@@ -74,26 +74,36 @@ bool find_checksum(const Model& model, std::size_t type, std::size_t* index) {
 // What a checksum covers, in bits. A field that is split in two, or two that
 // are merged, change the indexes of the fields a checksum covers and not what
 // it covers, so a model that cuts the bytes differently from the truth can
-// still have found the same checksum. When the covered fields are not all of a
-// fixed size at a fixed position there are no bits to compare, and the indexes
-// stand in for them.
+// still have found the same checksum. Where it starts is in bits when that
+// field is at a fixed position, and else an index. Where it ends is in bits when
+// that field has a fixed size at a fixed position; when it is the field right
+// before the checksum it is that, whatever its position (a payload of a size that
+// the frame says: what the frame ends with is the same in both models); and else
+// an index stands in for the bits.
 struct Coverage {
-    bool          in_bits = false;
-    std::uint64_t first   = 0;       // bit offset when in_bits, else a field index
-    std::uint64_t last    = 0;       // end bit offset when in_bits, else a field index
+    bool          first_in_bits = false;
+    std::uint64_t first         = 0;     // bit offset when first_in_bits, else a field index
+    bool          to_checksum   = false; // it ends where the checksum starts
+    bool          last_in_bits  = false;
+    std::uint64_t last          = 0;     // end bit offset when last_in_bits, else a field index
 };
 
-Coverage coverage_of(const Model& model, std::size_t type, const FieldInfo& checksum) {
+Coverage coverage_of(const Model& model, std::size_t type, std::size_t checksum_index, const FieldInfo& checksum) {
     Coverage out;
     out.first = checksum.covers_first;
     out.last  = checksum.covers_last;
     const FieldInfo     last_info = model.field(type, checksum.covers_last);
     const FieldPosition begin     = model.field_position(type, checksum.covers_first);
     const FieldPosition end       = model.field_position(type, checksum.covers_last);
-    if (begin.fixed && end.fixed && last_info.size_kind == SizeKind::Fixed) {
-        out.in_bits = true;
-        out.first   = begin.bit_offset;
-        out.last    = end.bit_offset + last_info.bit_size;
+    if (begin.fixed) {
+        out.first_in_bits = true;
+        out.first         = begin.bit_offset;
+    }
+    if (checksum.covers_last + 1 == checksum_index) {
+        out.to_checksum = true;
+    } else if (end.fixed && last_info.size_kind == SizeKind::Fixed) {
+        out.last_in_bits = true;
+        out.last         = end.bit_offset + last_info.bit_size;
     }
     return out;
 }
@@ -104,12 +114,13 @@ bool same_checksum(const Model& truth, std::size_t truth_type, std::size_t truth
     const FieldInfo     b  = found.field(found_type, found_index);
     const FieldPosition pa = truth.field_position(truth_type, truth_index);
     const FieldPosition pb = found.field_position(found_type, found_index);
-    const Coverage      ca = coverage_of(truth, truth_type, a);
-    const Coverage      cb = coverage_of(found, found_type, b);
+    const Coverage      ca = coverage_of(truth, truth_type, truth_index, a);
+    const Coverage      cb = coverage_of(found, found_type, found_index, b);
     return pa.fixed == pb.fixed && (!pa.fixed || pa.bit_offset == pb.bit_offset) &&
            a.size_kind == b.size_kind && a.bit_size == b.bit_size &&
            a.byte_order == b.byte_order && a.ascii_hex == b.ascii_hex &&
-           ca.in_bits == cb.in_bits && ca.first == cb.first && ca.last == cb.last &&
+           ca.first_in_bits == cb.first_in_bits && ca.first == cb.first && ca.to_checksum == cb.to_checksum &&
+           (ca.to_checksum || (ca.last_in_bits == cb.last_in_bits && ca.last == cb.last)) &&
            truth.field_detail(truth_type, truth_index) == found.field_detail(found_type, found_index);
 }
 

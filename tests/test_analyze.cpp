@@ -391,8 +391,11 @@ TEST_CASE("analyze: a counter is named with its step") {
 TEST_CASE("analyze: it says what it knows of a checksum it could not settle") {
     // Nothing but zeros: more candidates than the search keeps.
     const Analysis zeros = run(fixtures::capture_of(std::vector<Bytes>(6, Bytes(8, 0))));
+    REQUIRE(zeros.type_count() == 1);
+    CHECK(zeros.type_report(0).checksum.truncated);
     CHECK(contains(bw::describe_analysis(zeros),
-                   "frames; no checksum found: 64 or more candidates that cannot be told apart\n"));
+                   "frames; no checksum found: " + std::to_string(zeros.type_report(0).checksum.candidates) +
+                       " or more candidates that cannot be told apart\n"));
 
     // One frame repeated: several explanations, or one on thin evidence.
     bool several = false;

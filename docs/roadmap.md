@@ -51,9 +51,10 @@ the library useful as it is, and it ends:
    only small (a byte with zeros next to it), the length of a kind of one size, and
    text (NMEA 0183, fields separated by a character), which for 1.0 is framed
    and checksummed but not split into fields.
-3. **The parametric generator**, with noise (corrupted bytes, lost frames) and a
-   property test over thousands of seeds, in place of the named protocols of
-   waves 2 and 3. What it finds is fixed in the same pull request.
+3. **Done**, the parametric generator, with noise (corrupted bytes, lost frames) and
+   a property test over thousands of seeds, in place of the named protocols of
+   waves 2 and 3. What it found was fixed in the same pull request: see
+   [Baseline over made-up protocols](#baseline-over-made-up-protocols).
 4. **1.0**: thresholds taken from the baselines, the API frozen, the README and
    this document saying what the library does and does not, and the release.
 
@@ -244,7 +245,12 @@ protocol *shapes*, which picks a framing (gap, delimiter, length prefix,
 stuffing), a header (magic, version, counter, timestamp), a type discriminator
 with a layout per type, field kinds, endianness, a checksum family and
 coverage, bit-packed fields. Thousands of seeds give what a handful of named
-protocols cannot: the odd, undocumented-looking cases the tool is for.
+protocols cannot: the odd, undocumented-looking cases the tool is for. Done
+(`bw/synthetic.h`), but for the bit-packed fields and the timestamps: a protocol is
+framed by a gap, by a sync byte and a length, or between flags with stuffing; has one
+to four kinds of message of counters, floats, enumerations, flags, constants and bytes
+with no structure, or a payload of several sizes; and one of ten CRCs, XOR-8 or SUM-8,
+or none, sometimes with a byte that is in no frame.
 
 Rules for both:
 
@@ -528,6 +534,57 @@ kinds the truth has: a two-byte number with a high byte that never changes is tw
 fields, and the lengths, the sequence number and the flags come out as constants
 and payload (the incrementing time and the floats are put together). Every step
 of the list above moves a column of this table.
+
+### Baseline over made-up protocols
+
+`bw::generate_synthetic` makes a protocol from a seed, with its model, and `bw::add_noise`
+puts on any capture with a known answer what a line does: one byte of a frame that arrives
+wrong, and a frame that does not arrive. 1500 protocols of 200 frames, seeds 1 to 1500, run
+through `analyze`; the checksum is counted in the types where the frames can show one (eight
+different frames or more, and not a CRC with a byte of its own over frames of one size, for
+which several answers are the same). A *wrong* checksum is one that is found and is not the
+true one. Pinned, with a margin, by `tests/test_synthetic.cpp`; `BW_SWEEP_SEEDS=3000 bw_tests
+-tc="synthetic sweep*"` prints these numbers for as many seeds as asked.
+
+| The line | Frames cut exactly | Checksum found, the right one | Wrong | Where there is none | Boundaries hit | Exact fields |
+|---|---|---|---|---|---|---|
+| as it is | 100% (all of the 1500 whole) | 99.8% (3388 of 3396) | 0 | 0 | 90.3% | 69.1% |
+| 1 frame in 50 with a byte wrong | 99.5% | 97.8% (3505 of 3583) | 0 | 0 | 90.1% | 68.2% |
+| 1 frame in 20 lost | 100% | 99.7% (3387 of 3397) | 0 | 0 | 90.5% | 69.1% |
+| 1 in 20 wrong and 1 in 20 lost | 97.5% | 91.2% (3385 of 3710) | 2 | 0 | 89.2% | 66.6% |
+
+What it found, in the first hundreds of protocols, and was fixed:
+
+- **Checksums that cannot see a zero.** A sum, or a CRC that starts from zero, over a byte
+  that is always zero (the high byte of a length) explains the frames from that byte and
+  from the next: two answers, "cannot tell". It is one, and the one that covers the byte is
+  kept (`bw/crc_search.h`, `zero_bytes`).
+- **Candidates that explain nothing.** A CRC over a byte that never changes, with a stored
+  value of zero, is explained by every algorithm that starts and ends at zero, and was a
+  rival to the real one. What a candidate is worth is now counted once for each different
+  thing it covers, in the frames that it explains, and one that is worth enough alone and
+  has no other is the answer. A hidden byte is looked for when nothing has evidence of its
+  own, not only when nothing at all explains the frames (the weak ones filled the list).
+- **A line is not perfect.** One byte wrong in a frame made no checksum explain "all of the
+  frames", and 24% of the checksums were found with 2% of the frames wrong. With twelve
+  different frames or more, the search is also made over groups of eight, which may be
+  free of the wrong ones, and what they find is tried on all of them: a tenth may not agree,
+  and the report says how many. A chain of a sync byte and a length may have a tenth of
+  its frames broken, where it was a fiftieth.
+- **A byte in pairs is not a flag.** The byte that cut the most frames was taken for the flag,
+  and the zeros on top of a number cut more than the true flag did. The flag is the one that the
+  stuffing shows, and else the one whose frames are most of one size; and the flag that
+  nothing shows is not the framing when gaps say otherwise, or a chain of frames of two
+  sizes whose length says where each ends.
+- **The measure.** The checksum of a type with a payload of no fixed size was never "the
+  same" as the truth, for the fields before it were counted by index: where the coverage
+  ends at the checksum it is now compared as that, and where it starts, in bits.
+
+What it did not fix, and is said (README, "What the frames cannot say"): in a stream with
+nothing between frames of one size, any byte that never changes is as good a place to cut
+at as the start, so the generator makes at least two sizes there; a CRC with a byte of its
+own over frames of one size has several equivalent answers; frames that are all alike prove
+no checksum; and stuffing is recognised when both of its codes are in the capture.
 
 ## Related projects (no shared code)
 

@@ -3,7 +3,9 @@
 
 #include "bw/crc_search.h"
 
+#include <map>
 #include <set>
+#include <utility>
 
 namespace bw {
 namespace {
@@ -32,7 +34,39 @@ bool is_part_of(const Candidate& part, const Candidate& whole) {
            p.trailer_skip + p.field_bytes() <= w.trailer_skip + w.field_bytes();
 }
 
+// Is `later` the same checksum as `earlier`, only starting to cover after bytes that are zero in every frame?
+bool is_shifted(const Candidate& later, const Candidate& earlier, const std::vector<Frame>& frames) {
+    const Layout& l = later.layout;
+    const Layout& e = earlier.layout;
+    return later.spec == earlier.spec && later.seeded == earlier.seeded && (!later.seeded || later.seed == earlier.seed) &&
+           l.width == e.width && l.big_endian == e.big_endian && l.trailer_skip == e.trailer_skip &&
+           e.header_skip < l.header_skip && zero_bytes(frames, e.header_skip, l.header_skip);
+}
+
 } // namespace
+
+bool zero_bytes(const std::vector<Frame>& frames, std::size_t from, std::size_t to) {
+    for (std::size_t i = 0; i < frames.size(); ++i) {
+        for (std::size_t k = from; k < to; ++k) {
+            if (k >= frames[i].bytes.size() || frames[i].bytes[k] != 0) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+std::size_t distinct_covered(const std::vector<Frame>& frames, std::size_t first, std::size_t after) {
+    std::set<std::vector<u8> > seen;
+    for (std::size_t i = 0; i < frames.size(); ++i) {
+        const std::vector<u8>& b = frames[i].bytes;
+        if (first + after <= b.size()) {
+            seen.insert(std::vector<u8>(b.begin() + static_cast<std::ptrdiff_t>(first),
+                                        b.end() - static_cast<std::ptrdiff_t>(after)));
+        }
+    }
+    return seen.size();
+}
 
 bool Layout::fits(std::size_t frame_len) const {
     // Byte-aligned widths only; see the header for why a 15-bit field cannot
@@ -153,6 +187,7 @@ bool SearchReport::confident() const {
 SearchReport search(const std::vector<Frame>& frames,
                     const SearchOptions& options) {
     SearchReport report;
+    std::map<std::pair<std::size_t, std::size_t>, std::size_t> covered;      // distinct things covered, by place
     report.frames = frames.size();
     if (frames.empty()) {
         return report;
@@ -211,6 +246,19 @@ SearchReport search(const std::vector<Frame>& frames,
                     if (!layout.fits(shortest)) {
                         continue;
                     }
+                    if (options.min_evidence_bits != 0) {
+                        const std::pair<std::size_t, std::size_t> key(header, trailer + layout.field_bytes());
+                        std::map<std::pair<std::size_t, std::size_t>, std::size_t>::iterator hit = covered.find(key);
+                        if (hit == covered.end()) {
+                            hit = covered.insert(std::make_pair(key, distinct_covered(frames, key.first, key.second))).first;
+                        }
+                        Candidate worth;
+                        worth.layout = layout;
+                        worth.seeded = options.hidden_byte;
+                        if (candidate_evidence(worth, hit->second) < options.min_evidence_bits) {
+                            continue;
+                        }
+                    }
                     ++report.layouts_tried;
 
                     // The CRC as it is, and then with a hidden byte, if asked for.
@@ -230,6 +278,16 @@ SearchReport search(const std::vector<Frame>& frames,
                         }
                     }
                     for (std::size_t k = 0; k < matches.size(); ++k) {
+                        // The same checksum as one already found, starting later over bytes that are always zero:
+                        // not another answer, and not one more to keep. (The header is the innermost loop, so
+                        // the one that starts earlier has been found first.)
+                        bool shifted = false;
+                        for (std::size_t j = 0; j < report.candidates.size() && !shifted; ++j) {
+                            shifted = is_shifted(matches[k], report.candidates[j], frames);
+                        }
+                        if (shifted) {
+                            continue;
+                        }
                         if (report.candidates.size() < options.max_candidates) {
                             report.candidates.push_back(matches[k]);
                         } else {

@@ -226,12 +226,17 @@ bitwise crc-find FILE [FILE...]     work out which one a set of frames uses
 bitwise capture-info FILE           a first look at a capture file: events,
                                     channels, directions, timing
 bitwise protocols [NAME]            the known protocols, or the model of one
-bitwise synth NAME                  a synthetic capture of a known protocol,
+bitwise synth NAME                  a synthetic capture of a known protocol, or of
+                                    `random`, a protocol made up from the seed,
                                     as a capture file, on standard output
     --seed N                        the same seed gives the same capture on
                                     every platform (default 1)
     --frames N                      how many frames, 0 to 100000 (default 20)
     --jitter-permille N             timing noise, 0 to 500 (default 0)
+    --corrupt-permille N            of every thousand frames, how many have a
+                                    byte changed, 0 to 1000 (default 0)
+    --lose-permille N               ...and how many are not in the capture,
+                                    0 to 1000 (default 0)
 bitwise analyze FILE                infer the protocol of a capture file
     --min-gap-ratio N               how many times longer the gaps between
                                     frames must be than those inside one
@@ -254,7 +259,13 @@ event, which is what the later stages of the pipeline will read.
 
 `synth` needs no hardware: it writes a capture of a protocol the project knows,
 with a known answer, which is also what the tests of every stage are scored
-against.
+against. `synth random` is a different protocol for each seed: how its frames are
+told apart, from one to four kinds of message made of fields of every kind the
+pipeline claims, a checksum (or none), sometimes a payload of several sizes; and
+`--corrupt-permille` and `--lose-permille` put on any of them what a real line
+does, a byte that arrives wrong and a frame that does not arrive. Thousands of
+such protocols are what the tests try the pipeline on
+(`BW_SWEEP_SEEDS=3000 bw_tests -tc="synthetic sweep*"`).
 
 ```console
 $ bitwise protocols
@@ -335,8 +346,22 @@ and on nothing else: there are no real captures in it.
 - **Message types** are frame sizes, or, when a length field says the size of the
   frames and a discriminator (a message id) is the same in all the frames of a
   kind, all the sizes of a kind, if a checksum explains them all. A size that two
-  messages share, and a capture in which a frame has a wrong length, are not
-  handled yet.
+  messages share is not handled.
+- **A line that is not perfect** is read to a point. Frames cut by a sync byte and
+  a length may have a tenth of their chain broken (a byte of the length that
+  arrived wrong); a checksum is found when it explains nine frames in ten of
+  twelve different ones or more, and the report says how many it does not; a
+  frame that is lost costs nothing but itself. Past a tenth of the frames wrong,
+  the checksum is not found. A byte that is wrong in a constant makes it an
+  enumeration, and in a counter, payload.
+- **What the frames cannot say** is not guessed. In a stream with nothing between
+  the frames, all of one size, any byte that never changes is as good a place to
+  cut as the start (a rotation of the frame has the same bytes); a CRC with a byte
+  of its own (MAVLink's) over frames of one size has several equivalent answers,
+  which differ in a start value that the byte takes up; and a checksum is not
+  found in frames that are all the same, or that cover a byte that never changes.
+  Whether a byte that is always zero in front of what a checksum covers is covered
+  is not said either: the one that covers it is reported.
 - **Field discovery** works byte by byte: a byte that never changes, one that
   takes a few values, or one with no visible structure, with a run of the last kind
   taken as one field. Fields smaller than a byte are not handled, a number of
@@ -372,12 +397,13 @@ The plan is short on purpose; the detail is in [docs/roadmap.md](docs/roadmap.md
 stuffing, a sync byte and a length, lines of text), the checksum stage (66 CRCs,
 five sums, checksums written as text, a CRC with a byte that is in no frame), message
 types by discriminator, field discovery and typing for the six protocols of the
-corpus (with counters of several bytes and floats put together), and the Kaitai
-Struct exporter, checked with the real Kaitai tools.
+corpus (with counters of several bytes and floats put together), protocols made up
+from a seed and noise on the line, to try all of it on thousands of cases (and
+read what a line that is not perfect leaves), and the Kaitai Struct exporter,
+checked with the real Kaitai tools.
 
-**What is left for 1.0**, in two pull requests: a parametric generator of protocol
-shapes with noise to test the generality that six named protocols cannot, and the
-closing of the API, the thresholds and the release.
+**What is left for 1.0**, in one pull request: the closing of the API, the
+thresholds and the release.
 
 **Not planned:** splitting text into fields (NMEA 0183 is framed and its checksum
 found, its fields are not), numbers that are only small, more protocols with a

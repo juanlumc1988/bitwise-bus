@@ -728,3 +728,119 @@ TEST_CASE("a truncated candidate list is not mistaken for a unique answer") {
     CHECK_FALSE(report.unique());
     CHECK_FALSE(report.confident());
 }
+
+namespace {
+
+// Frames of `payload` bytes, the first of which is `first`, and a CRC of the spec over all of them (header_skip 0,
+// little-endian, at the end).
+std::vector<bw::Frame> frames_starting_with(const bw::CrcSpec& spec, std::size_t count, std::size_t payload,
+                                            const std::vector<u8>& leading, u64 seed) {
+    reseed(seed);
+    std::vector<bw::Frame> frames;
+    for (std::size_t f = 0; f < count; ++f) {
+        bw::Frame frame;
+        for (std::size_t i = 0; i < payload; ++i) {
+            frame.bytes.push_back(i < leading.size() ? leading[i] : next_byte());
+        }
+        const u64 value = bw::crc_compute(spec, frame.bytes.data(), frame.bytes.size());
+        frame.bytes.push_back(static_cast<u8>(value & 0xFF));
+        frame.bytes.push_back(static_cast<u8>(value >> 8));
+        frames.push_back(frame);
+    }
+    return frames;
+}
+
+std::size_t count_of(const bw::SearchReport& report, const char* name) {
+    std::size_t n = 0;
+    for (std::size_t i = 0; i < report.candidates.size(); ++i) {
+        n += std::string(report.candidates[i].spec->name) == name ? 1 : 0;
+    }
+    return n;
+}
+
+} // namespace
+
+TEST_CASE("zero_bytes: whether every frame has zeros in a range, and a range past the end is not zeros") {
+    std::vector<bw::Frame> frames(3);
+    for (std::size_t f = 0; f < 3; ++f) {
+        frames[f].bytes = std::vector<u8>(4, 0);
+        frames[f].bytes[3] = static_cast<u8>(1 + f);
+    }
+    CHECK(bw::zero_bytes(frames, 0, 3));
+    CHECK(bw::zero_bytes(frames, 1, 3));
+    CHECK(bw::zero_bytes(frames, 2, 2));                    // none: nothing is not a byte that is not zero
+    CHECK_FALSE(bw::zero_bytes(frames, 0, 4));
+    CHECK_FALSE(bw::zero_bytes(frames, 3, 4));
+    CHECK_FALSE(bw::zero_bytes(frames, 0, 5));              // there is no fifth byte
+    frames[1].bytes[1] = 7;
+    CHECK_FALSE(bw::zero_bytes(frames, 0, 3));
+    CHECK(bw::zero_bytes(frames, 2, 3));
+    CHECK(bw::zero_bytes(std::vector<bw::Frame>(), 0, 5));  // no frames to say it is not
+}
+
+TEST_CASE("a checksum that starts after bytes that are always zero is the one that starts before them") {
+    // A CRC that starts from zero, over frames whose first two bytes are zero: it explains them from the first byte, the
+    // second and the third, which is one checksum and not three; the one that covers the zeros is kept.
+    const bw::CrcSpec* spec = bw::catalog_find("CRC-16/XMODEM");
+    REQUIRE(spec != nullptr);
+    std::vector<u8> zeros(2, 0);
+    const bw::SearchReport report = bw::search(frames_starting_with(*spec, 10, 10, zeros, 91));
+    REQUIRE(count_of(report, "CRC-16/XMODEM") == 1);
+    for (std::size_t i = 0; i < report.candidates.size(); ++i) {
+        if (std::string(report.candidates[i].spec->name) == "CRC-16/XMODEM") {
+            CHECK(report.candidates[i].layout.header_skip == 0);
+            CHECK(report.candidates[i].layout.trailer_skip == 0);
+        }
+    }
+    // Bytes that are not zero but leave the register at zero, as the polynomial itself does (0x01 0x10 0x21, for
+    // x^16 + 0x1021), are not zeros: with them first, the CRC from the first byte and the one from the fourth are two.
+    std::vector<u8> polynomial(3, 0x10);
+    polynomial[0] = 0x01;
+    polynomial[2] = 0x21;
+    const bw::SearchReport poly = bw::search(frames_starting_with(*spec, 10, 10, polynomial, 95));
+    CHECK(count_of(poly, "CRC-16/XMODEM") == 2);
+    // And one frame that has another byte in the zeros leaves the CRC that starts at the first byte, and not the others.
+    std::vector<bw::Frame> mixed = frames_starting_with(*spec, 10, 10, zeros, 91);
+    std::vector<bw::Frame> other = frames_starting_with(*spec, 1, 10, std::vector<u8>(), 92);
+    mixed[4] = other[0];
+    CHECK(count_of(bw::search(mixed), "CRC-16/XMODEM") == 1);
+    // A CRC that does not start from zero is not the same from the second byte: the zeros are not nothing to it.
+    const bw::CrcSpec* modbus = bw::catalog_find("CRC-16/MODBUS");
+    REQUIRE(modbus != nullptr);
+    const bw::SearchReport init = bw::search(frames_starting_with(*modbus, 10, 10, zeros, 93));
+    REQUIRE(count_of(init, "CRC-16/MODBUS") == 1);
+    for (std::size_t i = 0; i < init.candidates.size(); ++i) {
+        if (std::string(init.candidates[i].spec->name) == "CRC-16/MODBUS") {
+            CHECK(init.candidates[i].layout.header_skip == 0);
+        }
+    }
+}
+
+TEST_CASE("a CRC with a hidden byte that starts after zeros is the one that starts before them too") {
+    const bw::CrcSpec* spec = bw::catalog_find("CRC-16/XMODEM");
+    REQUIRE(spec != nullptr);
+    bw::Layout layout;
+    layout.width = 16;
+    std::vector<bw::Frame> frames = synthesise_hidden(*spec, layout, 10, 10, 77, 94);
+    // Frames of 12 bytes with a CRC that has a byte of its own; their first byte made zero, and the CRC again.
+    for (std::size_t f = 0; f < frames.size(); ++f) {
+        frames[f].bytes[0] = 0;
+        std::vector<u8> covered(frames[f].bytes.begin(), frames[f].bytes.end() - 2);
+        covered.push_back(77);
+        const u64 value = bw::crc_compute(*spec, covered.data(), covered.size());
+        frames[f].bytes[10] = static_cast<u8>(value >> 8);
+        frames[f].bytes[11] = static_cast<u8>(value & 0xFF);
+    }
+    bw::SearchOptions options;
+    options.hidden_byte = true;
+    const bw::SearchReport report = bw::search(frames, options);
+    std::size_t seeded = 0;
+    for (std::size_t i = 0; i < report.candidates.size(); ++i) {
+        const bw::Candidate& c = report.candidates[i];
+        if (c.seeded && c.seed == 77 && std::string(c.spec->name) == "CRC-16/XMODEM") {
+            ++seeded;
+            CHECK(c.layout.header_skip == 0);
+        }
+    }
+    CHECK(seeded == 1);
+}

@@ -392,19 +392,20 @@ TEST_CASE("sync: the fewest frames is an option, and exact") {
     CHECK_FALSE(by_sync(Bytes(200, 0xA5), 0).info().found);
 }
 
-TEST_CASE("sync: one break in 50 frames is the most, and a frame before a break is not counted") {
+TEST_CASE("sync: one break in ten frames is the most, and a frame before a break is not counted") {
     // A frame followed by something that is not the sync byte is not known to be a frame: it is a break, and
     // the chain starts again at the next sync byte. Frames are counted without the ones before a break, so
-    // two breaks need 100 frames that count, and one break 50.
+    // that two breaks need 20 frames that count, and one break 10. The frames are long, so that the garbage
+    // is not enough to bring what the chain covers under 90% of the stream.
     struct Case { std::size_t frames, broken; bool found; };
-    const Case cases[4] = { { 102, 2, true }, { 101, 2, false }, { 51, 1, true }, { 50, 1, false } };
+    const Case cases[4] = { { 22, 2, true }, { 21, 2, false }, { 11, 1, true }, { 10, 1, false } };
     const Layout l = simple();
     for (int c = 0; c < 4; ++c) {
-        const Built b = build(l, some(cases[c].frames));
+        const Built b = build(l, lengths(cases[c].frames, std::vector<std::uint32_t>(1, 200)));
         Bytes bytes;
         std::vector<FrameSpan> expected;
         for (std::size_t i = 0; i < b.frames.size(); ++i) {
-            const bool broken = i % 30 == 10 && i / 30 < cases[c].broken;           // frames 10 and 40
+            const bool broken = i % 10 == 5 && i / 10 < cases[c].broken;            // frames 5 and 15
             if (!broken) {
                 expected.push_back(span(bytes.size(), b.frames[i].event_count));
             }

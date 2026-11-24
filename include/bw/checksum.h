@@ -20,9 +20,16 @@
 // holds, not the 16 it takes.
 //
 // A CRC with a hidden byte (MAVLink's CRC_EXTRA) is looked for only when
-// nothing else explains the frames: the byte is eight more bits of freedom, so
-// what it finds is worth eight bits less, and the same byte has to hold for
-// all of the frames, which are those of one kind of message.
+// nothing else explains the frames with evidence of its own: the byte is eight
+// more bits of freedom, so what it finds is worth eight bits less, and the same
+// byte has to hold for all of the frames, which are those of one kind of message.
+//
+// A line is not perfect. When no checksum explains every frame the search is
+// made again over small groups of different frames, some of which are free of the
+// ones that arrived wrong, and what it finds is tried on all of them: a checksum
+// that explains nine in ten of the frames, with the evidence that those give, is
+// found, and says how many it does not explain. What a candidate is worth is
+// counted over the frames that it explains.
 //
 // Only frames of one size are searched at a time. A checksum sits at a place
 // that depends on the frame's length, and a message type is, for now, a size.
@@ -59,6 +66,10 @@ struct ChecksumFinding {
     bool          seeded         = false;   // a CRC over what it covers and one byte that is not in the frame
     std::uint32_t seed           = 0;       //   (MAVLink's CRC_EXTRA): the value of that byte
     std::uint32_t algorithm      = 0;       // index: the catalogue of CRCs first, then the sums
+    // How many of the frames searched it does not explain: frames that arrived with a byte wrong. Zero
+    // unless there are enough different frames (12) for a tenth of them to be wrong and the rest to say
+    // what the checksum is; then at most a tenth of the frames.
+    std::uint32_t unexplained_frames = 0;
 };
 
 // Searches the frames of `size_bytes` bytes among those of the segmentation.

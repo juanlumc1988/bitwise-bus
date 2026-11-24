@@ -203,6 +203,16 @@ bool regular_frames(const std::vector<std::uint8_t>& bytes, const std::vector<Fr
     return alike * 100 >= 95 * sizes.size();
 }
 
+// How many of the frames are of the size that most of them are.
+std::uint64_t most_alike(const std::vector<FrameSpan>& frames) {
+    std::map<std::uint64_t, std::uint64_t> by_size;
+    std::uint64_t                          most = 0;
+    for (std::size_t i = 0; i < frames.size(); ++i) {
+        most = std::max(most, ++by_size[frames[i].event_count]);
+    }
+    return most;
+}
+
 // Does `flag` bound frames as a flag does? Fills `frames` with them when it does.
 bool bounds_frames(const std::vector<std::uint8_t>& bytes, std::uint8_t flag, std::uint32_t min_frames,
                    std::vector<FrameSpan>* frames) {
@@ -236,7 +246,8 @@ Stuffing find_stuffing(const std::vector<std::uint32_t>& after, const std::vecto
             const std::uint8_t  flag_code   = family == 0 ? static_cast<std::uint8_t>(flag ^ 0x20) : 0xDC;
             const std::uint8_t  escape_code = family == 0 ? static_cast<std::uint8_t>(e ^ 0x20) : 0xDD;
             // Both codes have to be there: one that always follows another byte is common (a line feed after a
-            // carriage return is the flag 0x2A with its bit 5 flipped), and two are not.
+            // carriage return is the flag 0x2A with its bit 5 flipped, and a constant field of two bytes can be
+            // any pair), and two are not.
             const std::uint64_t seen        = static_cast<std::uint64_t>(after[e * 256 + flag_code]) + after[e * 256 + escape_code];
             if (after[e * 256 + flag_code] > 0 && after[e * 256 + escape_code] > 0 && seen >= 3 && seen == followed[e] &&
                 seen > best_seen) {
@@ -276,6 +287,7 @@ Segmentation segment_by_flags(const Capture& capture, const SegmentationOptions&
     std::uint8_t           flag  = 0;
     Stuffing               stuffing;
     std::vector<FrameSpan> best;
+    std::uint64_t          best_alike = 0;
     for (unsigned b = 0; b < 256; ++b) {
         if (count[b] == 0) {
             continue;
@@ -286,11 +298,18 @@ Segmentation segment_by_flags(const Capture& capture, const SegmentationOptions&
             continue;
         }
         std::vector<FrameSpan> frames;
-        if (bounds_frames(bytes, static_cast<std::uint8_t>(b), options.min_flag_frames, &frames) &&
-            (!found || frames.size() > best.size())) {
-            found    = true;
-            flag     = static_cast<std::uint8_t>(b);
-            stuffing = candidate;
+        if (!bounds_frames(bytes, static_cast<std::uint8_t>(b), options.min_flag_frames, &frames)) {
+            continue;
+        }
+        // The byte that cuts the most frames of one size (the lower byte, in a tie): a byte that comes in pairs inside
+        // frames (the zeros on top of a number) cuts them at places that depend on what is in them, and not at the
+        // same places in every frame.
+        const std::uint64_t alike = most_alike(frames);
+        if (!found || alike > best_alike) {
+            found      = true;
+            flag       = static_cast<std::uint8_t>(b);
+            stuffing   = candidate;
+            best_alike = alike;
             best.swap(frames);
         }
     }
@@ -387,7 +406,9 @@ Chain follow(const std::vector<std::uint8_t>& bytes, const std::vector<std::uint
 }
 
 bool is_framing(const Chain& chain, std::uint64_t stream_size, std::uint32_t min_frames) {
-    return chain.frames.size() >= min_frames && chain.breaks * 50 <= chain.frames.size() &&
+    // A tenth of the frames may be broken: a line is not perfect, and a byte that arrives wrong in a length or a sync
+    // byte is a break. (More than that, and what the chain says is not what the stream is.)
+    return chain.frames.size() >= min_frames && chain.breaks * 10 <= chain.frames.size() &&
            chain.covered * 100 >= 90 * stream_size;
 }
 
@@ -564,15 +585,38 @@ bool refines(const Segmentation& fine, const Segmentation& coarse, std::uint64_t
     return true;
 }
 
+// How many sizes a tenth of the frames or more have. A length that says a size means something when frames
+// are of several sizes; where one frame in a hundred has a byte more (a byte stuffed), any byte that is constant
+// in each of the two sizes is a length that fits.
+std::size_t sizes_of_a_tenth(const Segmentation& segmentation) {
+    std::map<std::uint64_t, std::uint64_t> by_size;
+    for (std::size_t i = 0; i < segmentation.frame_count(); ++i) {
+        ++by_size[segmentation.frame(i).event_count];
+    }
+    std::size_t n = 0;
+    for (std::map<std::uint64_t, std::uint64_t>::const_iterator it = by_size.begin(); it != by_size.end(); ++it) {
+        n += it->second * 10 >= segmentation.frame_count() ? 1 : 0;
+    }
+    return n;
+}
+
 } // namespace
 
 Segmentation segment_frames(const Capture& capture, const SegmentationOptions& options) {
     const Segmentation flagged = segment_by_flags(capture, options);
+    const Segmentation gaps    = segment_by_gaps(capture, options);
+    const Segmentation sync    = segment_by_sync(capture, options);
+    // A flag that the stuffing shows is a flag. One that it does not is a byte that comes in pairs, and is the
+    // framing unless something else says more: gaps that its frames do not cut at (the zeros on top of a number
+    // are not where frames end), or a length that sizes every frame of a chain of them, with none broken (a byte
+    // that is stuffed makes a frame longer than its type, and a length that is not one is wrong by it).
     if (flagged.info().found) {
-        return flagged;
+        const bool gapped = gaps.info().found && !refines(flagged, gaps, capture.event_count());
+        const bool sized  = sync.info().breaks == 0 && sizes_of_a_tenth(sync) >= 2;
+        if (flagged.info().escaped || (!gapped && !sized)) {
+            return flagged;
+        }
     }
-    const Segmentation gaps  = segment_by_gaps(capture, options);
-    const Segmentation sync  = segment_by_sync(capture, options);
     const Segmentation lines = sync.info().found ? Segmentation() : segment_by_lines(capture, options);
     const Segmentation& fine = sync.info().found ? sync : lines;
     if (!fine.info().found) {

@@ -473,11 +473,11 @@ TEST_CASE("sums, stage 2: a sum of nothing is not a checksum") {
     CHECK(f.candidates == 2);                   // XOR-8 and SUM-8 over the first byte, as the second
 }
 
-TEST_CASE("sums, stage 2: frames of three zeros are explained by the CRCs and by seven sums, and the evidence is the narrowest's") {
-    // The CRCs that start from nothing and end with nothing, and seven sums: one byte of three bytes, at two
-    // places, by three sums, is inside the field of Fletcher's two sums (in either of its orders, and
-    // either of its moduli), so those six are not findings of their own. A zero byte is not a digit, so none
-    // is text.
+TEST_CASE("sums, stage 2: frames of three zeros are explained by the CRCs and by four sums, and the evidence is the narrowest's") {
+    // The CRCs that start from nothing and end with nothing, and four sums: one byte of three bytes, by three
+    // sums, is inside the field of Fletcher's two sums (in either of its orders, and either of its moduli), so
+    // it is not a finding of its own, and what starts at the second byte is what starts at the first, since
+    // a zero is covered or not and the frames do not say. A zero byte is not a digit, so none is text.
     const std::vector<Bytes> frames(6, Bytes(3, 0));
     std::vector<bw::Frame>   given(frames.size());
     for (std::size_t i = 0; i < frames.size(); ++i) {
@@ -485,14 +485,14 @@ TEST_CASE("sums, stage 2: frames of three zeros are explained by the CRCs and by
     }
     const bw::SearchReport crcs = bw::search(given);
     REQUIRE_FALSE(crcs.truncated);
-    REQUIRE(crcs.candidates.size() + 7 <= 64);
+    REQUIRE(crcs.candidates.size() + 4 <= 64);
 
     const ChecksumFinding f = search(frames);
     CHECK_FALSE(f.found);
     CHECK_FALSE(f.truncated);
-    CHECK(f.candidates == crcs.candidates.size() + 7);
+    CHECK(f.candidates == crcs.candidates.size() + 4);
     CHECK(f.distinct_frames == 1);
-    CHECK(f.evidence_bits == 8);                // a byte, in the narrowest of them
+    CHECK(f.evidence_bits == 16);               // two bytes, in the narrowest of them
 }
 
 TEST_CASE("sums, stage 2: what it covers is the same bytes, for one to be a part of another") {
@@ -568,7 +568,8 @@ TEST_CASE("sums, stage 2: the CRCs and the sums are asked together, and the cap 
     const ChecksumFinding zeros = search(std::vector<Bytes>(6, Bytes(12, 0)));
     CHECK_FALSE(zeros.found);
     CHECK(zeros.truncated);
-    CHECK(zeros.candidates == 64);
+    CHECK(zeros.candidates > 32);               // what it keeps, less the ones that are a part of another
+    CHECK(zeros.candidates <= 64);
 }
 
 TEST_CASE("sums, stage 2: frames that are not explained have no candidates and no evidence") {
@@ -587,4 +588,55 @@ TEST_CASE("sums, stage 2: frames that are not explained have no candidates and n
     CHECK(f.evidence_bits == 0);
     CHECK(f.frames == 30);
     CHECK(f.distinct_frames == 30);
+}
+
+TEST_CASE("sums, stage 2: a sum that starts after bytes that are always zero is the one that starts before them") {
+    // XOR-8 of five bytes, the first of which is zero in every frame: it explains the frames from the first byte and
+    // from the second, which is one finding, and the one that covers the zero is kept.
+    fixtures::Random   rng(52);
+    std::vector<Bytes> frames;
+    for (int i = 0; i < 20; ++i) {
+        Bytes f(1, 0);
+        for (int k = 0; k < 4; ++k) {
+            f.push_back(rng.byte());
+        }
+        std::uint8_t x = 0;
+        for (std::size_t k = 0; k < f.size(); ++k) {
+            x = static_cast<std::uint8_t>(x ^ f[k]);
+        }
+        f.push_back(x);
+        frames.push_back(f);
+    }
+    const ChecksumFinding f = search(frames);
+    REQUIRE(f.found);
+    CHECK(f.candidates == 1);
+    CHECK(bw::checksum_algorithm_name(f.algorithm) == "XOR-8");
+    CHECK(f.header_skip == 0);
+}
+
+TEST_CASE("sums, stage 2: a sum with one frame in twenty wrong is found, and says so") {
+    fixtures::Random   rng(53);
+    std::vector<Bytes> frames;
+    for (int i = 0; i < 30; ++i) {
+        Bytes f;
+        for (int k = 0; k < 6; ++k) {
+            f.push_back(rng.byte());
+        }
+        std::uint8_t sum = 0;
+        for (std::size_t k = 0; k < f.size(); ++k) {
+            sum = static_cast<std::uint8_t>(sum + f[k]);
+        }
+        f.push_back(sum);
+        frames.push_back(f);
+    }
+    for (int wrong = 0; wrong < 3; ++wrong) {
+        frames[3 + 9 * wrong][2] = static_cast<std::uint8_t>(frames[3 + 9 * wrong][2] ^ 0x10);
+    }
+    const ChecksumFinding f = search(frames);
+    REQUIRE(f.found);                                       // a tenth of 30 are 3
+    CHECK(bw::checksum_algorithm_name(f.algorithm) == "SUM-8");
+    CHECK(f.unexplained_frames == 3);
+    CHECK(f.evidence_bits == 27 * 8);
+    frames[0][4] = static_cast<std::uint8_t>(frames[0][4] ^ 0x01);        // four of them: more than a tenth
+    CHECK_FALSE(search(frames).found);
 }

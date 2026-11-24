@@ -416,3 +416,41 @@ TEST_CASE("fields: message types are chosen by index, and one that is missing is
     CHECK_THROWS_AS(bw::score_fields(fixtures::request_model(), 0, fixtures::request_model(), 1),
                     std::out_of_range);
 }
+
+TEST_CASE("fields: a checksum that covers up to itself is the same, though the fields before it are cut otherwise and the body has no fixed size") {
+    // sync (2 bytes) | length | id (2 bytes) | body, as long as the length says | crc over everything from the length
+    Model truth;
+    std::size_t t = truth.add_message_type("variable");
+    truth.add_field(t, "sync", fixed(FieldKind::Constant, 16, ByteOrder::Big), "");
+    truth.add_field(t, "length", fixed(FieldKind::Length, 8), "");
+    truth.add_field(t, "id", fixed(FieldKind::Constant, 16, ByteOrder::Big), "");
+    bw::FieldInfo body;
+    body.kind       = FieldKind::Payload;
+    body.size_kind  = bw::SizeKind::FromField;
+    body.size_field = 1;
+    truth.add_field(t, "body", body, "");
+    truth.add_field(t, "crc", fixtures::checksum(16, ByteOrder::Little, 1, 3), "CRC-16/MODBUS");
+
+    // The same, with the 2 bytes of the sync and of the id as two fields each: the indexes are not the truth's.
+    const auto cut = [](std::uint32_t first, std::uint32_t last) {
+        Model m;
+        const std::size_t u = m.add_message_type("variable");
+        m.add_field(u, "sync_a", fixed(FieldKind::Constant, 8), "");
+        m.add_field(u, "sync_b", fixed(FieldKind::Constant, 8), "");
+        m.add_field(u, "length", fixed(FieldKind::Length, 8), "");
+        m.add_field(u, "id_a", fixed(FieldKind::Constant, 8), "");
+        m.add_field(u, "id_b", fixed(FieldKind::Constant, 8), "");
+        bw::FieldInfo payload;
+        payload.kind       = FieldKind::Payload;
+        payload.size_kind  = bw::SizeKind::FromField;
+        payload.size_field = 2;
+        m.add_field(u, "body", payload, "");
+        m.add_field(u, "crc", fixtures::checksum(16, ByteOrder::Little, first, last), "CRC-16/MODBUS");
+        return m;
+    };
+    CHECK(bw::score_fields(truth, 0, cut(2, 5), 0).checksum_match);
+    CHECK(bw::score_fields(cut(2, 5), 0, truth, 0).checksum_match);        // and the other way round
+    CHECK_FALSE(bw::score_fields(truth, 0, cut(3, 5), 0).checksum_match);  // starts a byte later
+    CHECK_FALSE(bw::score_fields(truth, 0, cut(1, 5), 0).checksum_match);  // and a byte earlier
+    CHECK_FALSE(bw::score_fields(truth, 0, cut(2, 4), 0).checksum_match);  // stops before the body, which is not the end
+}
