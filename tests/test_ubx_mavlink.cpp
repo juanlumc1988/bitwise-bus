@@ -372,7 +372,7 @@ TEST_CASE("mavlink1: its model is the documented one") {
         CHECK(crc.byte_order == bw::ByteOrder::Little);
         CHECK(crc.covers_first == 1);                                // from the length: not the STX
         CHECK(crc.covers_last == last - 1);
-        CHECK(m.field_detail(t, last) == "CRC-16/MCRF4XX seeded with CRC_EXTRA " + std::to_string(extras[t]));
+        CHECK(m.field_detail(t, last) == "CRC-16/MCRF4XX seeded with " + std::to_string(extras[t]));
         std::uint64_t payload_bits = 0;
         for (std::size_t f = 6; f < last; ++f) {
             payload_bits += m.field(t, f).bit_size;

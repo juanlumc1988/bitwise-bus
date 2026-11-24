@@ -468,10 +468,11 @@ TEST_CASE("analyze_frames: the frames are taken as they are, and nothing is look
 
 TEST_CASE("wave 1 baseline: with the true frames, what the stages find in UBX and MAVLink 1") {
     // Where wave 1 starts: stage 3 finds no frames in these (the test of the protocols checks that),
-    // and given the true ones, stage 2 finds Fletcher-8 in two of the three types of UBX, and no
-    // checksum in MAVLink, which is a CRC with a hidden seed byte that the catalogue does not have;
-    // the third type of UBX, the acknowledgement, has three different frames in 60, which Fletcher-8
-    // and Fletcher-16 (the same sums, modulo 255) explain alike, so there it says it cannot tell.
+    // and given the true ones, stage 2 finds Fletcher-8 in two of the three types of UBX, and in all
+    // three of MAVLink the CRC-16/MCRF4XX seeded with the byte of each message (50, 124 and 39, which
+    // the frames do not hold); the third type of UBX, the acknowledgement, has three different frames
+    // in 60, which Fletcher-8 and Fletcher-16 (the same sums, modulo 255) explain alike, so there it
+    // says it cannot tell.
     // Stage 4 finds every boundary there is, and some more, because a number of two bytes with a high
     // byte that never changes is two fields to it; and stage 5 types what it can see. The numbers are
     // those of 200 frames of seed 3, and each step of wave 1 that improves one of them changes this
@@ -487,9 +488,9 @@ TEST_CASE("wave 1 baseline: with the true frames, what the stages find in UBX an
         { "ubx",      "ack_ack",    8,  10, 9,  11, 9,  6,  5, 2, false },
         { "ubx",      "cfg_rate",   9,  13, 10, 14, 10, 5,  5, 1, true },
         { "ubx",      "nav_status", 13, 21, 14, 22, 14, 9,  6, 1, true },
-        { "mavlink1", "heartbeat",  13, 16, 14, 17, 14, 12, 8, 0, false },
-        { "mavlink1", "sys_status", 20, 37, 21, 38, 20, 6,  4, 0, false },
-        { "mavlink1", "attitude",   14, 23, 15, 24, 15, 7,  4, 0, false },
+        { "mavlink1", "heartbeat",  13, 16, 14, 17, 14, 12, 9, 1, true },
+        { "mavlink1", "sys_status", 20, 38, 21, 39, 21, 8,  6, 1, true },
+        { "mavlink1", "attitude",   14, 23, 15, 24, 15, 7,  5, 1, true },
     };
     const char* protocols[2] = { "ubx", "mavlink1" };
     std::size_t checked = 0;

@@ -231,3 +231,59 @@ TEST_CASE("an out-of-range width yields zero rather than shifting by 64") {
     const u64 value = bw::crc_compute(widest, data.data(), data.size());
     CHECK(value != 0u);   // it computed something rather than bailing out
 }
+
+TEST_CASE("a CRC fed in pieces is the CRC fed at once, wherever it is cut") {
+    // crc_compute is crc_begin, crc_feed and crc_end in a row. A search relies on feeding what a frame
+    // covers once and ending the CRC for many bytes after it, so a cut anywhere has to be invisible.
+    std::vector<u8> data(37);
+    for (std::size_t i = 0; i < data.size(); ++i) {
+        data[i] = static_cast<u8>(i * 29u + 3u);
+    }
+    for (std::size_t s = 0; s < bw::catalog_size(); ++s) {
+        const bw::CrcSpec& spec = bw::catalog()[s];
+        CAPTURE(std::string(spec.name));
+        const u64 whole = bw::crc_compute(spec, data.data(), data.size());
+        for (std::size_t cut = 0; cut <= data.size(); cut += 6) {
+            u64 state = bw::crc_begin(spec);
+            state     = bw::crc_feed(spec, state, data.data(), cut);
+            state     = bw::crc_feed(spec, state, data.data() + cut, data.size() - cut);
+            CHECK(bw::crc_end(spec, state) == whole);
+        }
+        // Byte by byte.
+        u64 state = bw::crc_begin(spec);
+        for (std::size_t i = 0; i < data.size(); ++i) {
+            state = bw::crc_feed(spec, state, &data[i], 1);
+        }
+        CHECK(bw::crc_end(spec, state) == whole);
+        // Nothing fed: the CRC of nothing.
+        CHECK(bw::crc_end(spec, bw::crc_begin(spec)) == bw::crc_compute(spec, data.data(), 0));
+    }
+}
+
+TEST_CASE("the CRC in progress is not the CRC: ending it is a step of its own") {
+    // For a reflected-out CRC with a final xor, the register in progress is neither: begin gives the initial
+    // value, and a CRC with a xor is not that value xored until it has been ended.
+    const bw::CrcSpec* sdlc = bw::catalog_find("CRC-16/IBM-SDLC");
+    REQUIRE(sdlc != nullptr);
+    CHECK(bw::crc_begin(*sdlc) == 0xFFFFu);
+    CHECK(bw::crc_end(*sdlc, 0xFFFFu) == 0x0000u);                      // reflect(0xFFFF) ^ 0xFFFF
+    CHECK(bw::crc_end(*sdlc, 0x0000u) == 0xFFFFu);
+
+    // A state wider than the width is read as its low bits, like the other parameters.
+    CHECK(bw::crc_end(*sdlc, 0xABCD1234u) == bw::crc_end(*sdlc, 0x1234u));
+    const u8 byte = 0x5A;
+    CHECK(bw::crc_feed(*sdlc, 0xFFFF1234u, &byte, 1) == bw::crc_feed(*sdlc, 0x1234u, &byte, 1));
+    CHECK(bw::crc_feed(*sdlc, 0xFFFF1234u, &byte, 0) == 0x1234u);       // nothing fed: the state, in its width
+}
+
+TEST_CASE("a CRC in progress of a width that is not one to 64 gives zero, as crc_compute does") {
+    const u8 data[3] = { 1, 2, 3 };
+    bw::CrcSpec zero_width = { "bogus", 0, 0x07, 0x55, false, false, 0x00, 0 };      // with an init that is not 0
+    bw::CrcSpec too_wide   = { "bogus", 65, 0x07, 0x55, false, false, 0x00, 0 };
+    CHECK(bw::crc_begin(zero_width) == 0u);
+    CHECK(bw::crc_begin(too_wide) == 0u);
+    CHECK(bw::crc_feed(zero_width, 5u, data, 3) == 5u);                 // nothing happens to the state
+    CHECK(bw::crc_feed(too_wide, 5u, data, 3) == 5u);
+    CHECK(bw::crc_end(zero_width, 5u) == 0u);
+    CHECK(bw::crc_end(too_wide, 5u) == 0u);
+}

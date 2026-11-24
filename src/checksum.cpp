@@ -23,6 +23,11 @@ std::uint32_t saturate(std::uint64_t value) {
 // As in the CRC search (bw/crc_search.cpp): below this, a single match is as likely to be chance as fact.
 const std::uint32_t kConfidentEvidenceBits = 32;
 
+// A hidden byte is looked for in at least this many different frames. With one, every checksum of a byte
+// has some value of it that explains the frame, and with two a few by chance: the search would answer
+// with candidates for bytes that are not a checksum at all.
+const std::size_t kMinFramesForHiddenByte = 3;
+
 // Where a sum sits in a frame and how it is written.
 struct SumLayout {
     std::size_t header_skip  = 0;
@@ -184,29 +189,35 @@ ChecksumFinding find_checksum(const Capture& capture, const Segmentation& segmen
         return finding;
     }
 
-    const SearchOptions options;
-    const SearchReport  report = search(frames, options);
+    SearchOptions options;
+    SearchReport  report = search(frames, options);
     // The CRCs and the sums share the candidates the options allow.
-    bool                      sums_truncated = false;
-    const std::size_t         room = options.max_candidates - report.candidates.size();
-    const std::vector<SumHit> hits = search_sums(frames, options, room, &sums_truncated);
+    bool                sums_truncated = false;
+    const std::size_t   room = options.max_candidates - report.candidates.size();
+    std::vector<SumHit> hits = search_sums(frames, options, room, &sums_truncated);
+
+    // Only if nothing explains the frames as they are: a hidden byte would explain too much.
+    if (report.candidates.empty() && hits.empty() && !report.truncated && !sums_truncated &&
+        report.distinct_frames >= kMinFramesForHiddenByte) {
+        options.hidden_byte = true;
+        report              = search(frames, options);
+    }
 
     finding.distinct_frames = saturate(report.distinct_frames);
     finding.candidates      = saturate(report.candidates.size() + hits.size());
     finding.truncated       = report.truncated || sums_truncated;
 
-    // As in the CRC search: what the narrowest of the candidates holds, once for each different frame.
+    // As in the CRC search: what the weakest of the candidates is worth, once for each different frame.
     // A sum written as text holds 8 bits, the same as one written as a byte.
-    std::vector<std::uint32_t> widths;
+    std::vector<std::uint32_t> bits;
     for (std::size_t i = 0; i < report.candidates.size(); ++i) {
-        widths.push_back(report.candidates[i].layout.width);
+        bits.push_back(candidate_evidence(report.candidates[i], report.distinct_frames));
     }
     for (std::size_t i = 0; i < hits.size(); ++i) {
-        widths.push_back(hits[i].spec->width);
+        bits.push_back(saturate(static_cast<std::uint64_t>(report.distinct_frames) * hits[i].spec->width));
     }
-    if (!widths.empty()) {
-        const std::uint32_t narrowest = *std::min_element(widths.begin(), widths.end());
-        finding.evidence_bits = saturate(static_cast<std::uint64_t>(report.distinct_frames) * narrowest);
+    if (!bits.empty()) {
+        finding.evidence_bits = *std::min_element(bits.begin(), bits.end());
     }
 
     if (finding.truncated || finding.candidates != 1 || finding.evidence_bits < kConfidentEvidenceBits) {
@@ -220,6 +231,8 @@ ChecksumFinding find_checksum(const Capture& capture, const Segmentation& segmen
         finding.width_bits   = only.layout.width;
         finding.byte_order   = only.layout.width <= 8 ? ByteOrder::NotApplicable
                              : only.layout.big_endian ? ByteOrder::Big : ByteOrder::Little;
+        finding.seeded       = only.seeded;
+        finding.seed         = only.seed;                  // 0 unless seeded
         finding.algorithm    = saturate(static_cast<std::uint64_t>(only.spec - catalog()));
     } else {
         const SumHit& only = hits[0];

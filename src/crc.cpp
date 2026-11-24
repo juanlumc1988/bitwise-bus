@@ -25,15 +25,22 @@ u64 reflect(u64 v, u8 width) {
     return out;
 }
 
-u64 crc_compute(const CrcSpec& spec, const u8* data, std::size_t len) {
+u64 crc_begin(const CrcSpec& spec) {
     if (spec.width == 0 || spec.width > 64) {
         return 0;
+    }
+    return spec.init & width_mask(spec.width);
+}
+
+u64 crc_feed(const CrcSpec& spec, u64 state, const u8* data, std::size_t len) {
+    if (spec.width == 0 || spec.width > 64) {
+        return state;
     }
 
     const u64 mask   = width_mask(spec.width);
     const u64 topbit = 1ULL << (spec.width - 1u);
 
-    u64 crc = spec.init & mask;
+    u64 crc = state & mask;
 
     // Bit at a time, most significant first. The usual byte-wise formulation
     // shifts the message byte into the top of the register, which only works
@@ -58,11 +65,23 @@ u64 crc_compute(const CrcSpec& spec, const u8* data, std::size_t len) {
             }
         }
     }
+    return crc;
+}
 
+u64 crc_end(const CrcSpec& spec, u64 state) {
+    if (spec.width == 0 || spec.width > 64) {
+        return 0;
+    }
+    const u64 mask = width_mask(spec.width);
+    u64       crc  = state & mask;
     if (spec.refout) {
         crc = reflect(crc, spec.width);
     }
     return (crc ^ spec.xorout) & mask;
+}
+
+u64 crc_compute(const CrcSpec& spec, const u8* data, std::size_t len) {
+    return crc_end(spec, crc_feed(spec, crc_begin(spec), data, len));
 }
 
 bool crc_spec_self_test(const CrcSpec& spec) {

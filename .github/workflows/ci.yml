@@ -92,7 +92,42 @@ jobs:
             echo "claimed a confident match on random bytes"
             exit 1
           fi
+          if ./build/bitwise crc-find --hidden-byte /tmp/noise/*.bin | grep -q "comfortably more evidence"; then
+            echo "claimed a confident match on random bytes, with a hidden byte"
+            exit 1
+          fi
           echo "no false positive on noise"
+
+      # MAVLink's CRC covers one byte that is in no frame (CRC_EXTRA). Frames
+      # made outside the tool: without being told, there is no answer; asked to
+      # try a hidden byte, it finds the CRC and the byte.
+      - name: Find a CRC with a byte that is in no frame
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/hidden
+          python3 - <<'PY'
+          import random
+          def mcrf4xx(data, extra):
+              crc = 0xFFFF
+              for b in list(data) + [extra]:
+                  crc ^= b
+                  for _ in range(8):
+                      crc = (crc >> 1) ^ 0x8408 if (crc & 1) else (crc >> 1)
+              return crc
+          random.seed(11)
+          for i in range(6):
+              body = bytes([9, i, 1, 1, 0]) + bytes(random.randrange(256) for _ in range(9))
+              c = mcrf4xx(body, 50)
+              open("/tmp/hidden/m%d.bin" % i, "wb").write(bytes([0xFE]) + body + bytes([c & 0xFF, c >> 8]))
+          PY
+          if ./build/bitwise crc-find /tmp/hidden/*.bin; then
+            echo "found a CRC that needs a byte it was not given"
+            exit 1
+          fi
+          ./build/bitwise crc-find --hidden-byte /tmp/hidden/*.bin | tee /tmp/hidden.txt
+          grep -q "CRC-16/MCRF4XX" /tmp/hidden.txt
+          grep -q "0x32" /tmp/hidden.txt
+          grep -q "comfortably more evidence" /tmp/hidden.txt
 
   sanitizers:
     name: asan + ubsan

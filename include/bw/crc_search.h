@@ -73,6 +73,13 @@ struct Layout {
 struct Candidate {
     const CrcSpec* spec = nullptr;
     Layout         layout;
+
+    // The CRC was over what the layout covers and then one more byte that is
+    // not in the frame: MAVLink's CRC_EXTRA, a number each message has and
+    // both ends know. `seed` is that byte, and only means something when
+    // `seeded` is set.
+    bool seeded = false;
+    u8   seed   = 0;
 };
 
 struct SearchOptions {
@@ -85,6 +92,13 @@ struct SearchOptions {
 
     bool try_big_endian    = true;
     bool try_little_endian = true;
+
+    // Also try every CRC with one more byte after the covered range, of any
+    // value, that is not in the frame. The same byte has to explain every
+    // frame, so give the search the frames of one kind of message. Off by
+    // default: it adds eight bits to the search space, and the answer is
+    // worth eight bits less (see candidate_evidence).
+    bool hidden_byte = false;
 
     std::size_t max_candidates = 64;
 };
@@ -104,8 +118,9 @@ struct SearchReport {
     std::size_t specs_tried    = 0;
     std::size_t layouts_tried = 0;
 
-    // distinct_frames * checksum width, for the narrowest candidate found.
-    // The measure of how much the answer is worth.
+    // candidate_evidence for the weakest candidate found: distinct_frames *
+    // checksum width, less the eight bits of a hidden byte the search was free
+    // to choose. The measure of how much the answer is worth.
     u32 evidence_bits = 0;
 
     // More candidates matched than max_candidates allowed, so the list below
@@ -128,6 +143,16 @@ u64 extract_checksum(const Frame& frame, const Layout& layout);
 // True when `spec` and `layout` explain every frame in the corpus.
 bool verify(const std::vector<Frame>& frames, const Layout& layout,
             const CrcSpec& spec);
+
+// The values of one more byte, after what the layout covers, with which `spec`
+// and `layout` explain every frame. Empty when there is none. With a single
+// frame of an 8-bit checksum there is always exactly one.
+std::vector<u8> hidden_bytes(const std::vector<Frame>& frames, const Layout& layout,
+                             const CrcSpec& spec);
+
+// What a candidate is worth, in bits: the checksum's width for each distinct
+// frame it explains, and 8 less if the search chose a hidden byte to make it.
+u32 candidate_evidence(const Candidate& candidate, std::size_t distinct_frames);
 
 SearchReport search(const std::vector<Frame>& frames,
                     const SearchOptions& options = SearchOptions());
