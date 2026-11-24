@@ -254,6 +254,69 @@ def mavlink2(bitwise, compiler, work):
         print("%s: %d frames read back by %d types, %d with a sized payload" % (label, used, len(parsers), len(sized)))
 
 
+def wide_numbers(bitwise, compiler, work):
+    """Counters of four bytes and floats, as the pipeline finds them in UBX and MAVLink 1.
+
+    The frames are cut here by their length. Each is read by the definitions of all the types, whose constants
+    refuse the frames of the others, so it is read by exactly one, which has to use all of it and give the same
+    bytes back. UBX NAV-STATUS has two times that go up by 1000 in each message (a `u4le` counter each), and
+    MAVLink 1 ATTITUDE six floats (`f4le`): what they are read as is checked against the bytes of the frame
+    read the other way round, with `struct`, and not against the exporter."""
+    cases = (("ubx", lambda data, at: data[at + 4] + 8, 24), ("mavlink1", lambda data, at: data[at + 1] + 8, 36))
+    for protocol, size_of, wide in cases:
+        label = protocol
+        capture = run([bitwise, "synth", protocol, "--seed", 3, "--frames", 200]).stdout
+        path = work / (protocol + ".csv")
+        path.write_text(capture)
+        data = b"".join(frames_of_capture(capture, 1))
+        frames, at = [], 0
+        while at < len(data):
+            size = size_of(data, at)
+            frames.append(data[at:at + size])
+            at += size
+        parsers = []
+        for index in range(8):
+            exported = run([bitwise, "export", path, "--type", index, "--id", "kind%d" % index])
+            if exported.returncode != 0:
+                break                              # no more types
+            parsers.append((exported.stdout,) + compile_ksy(exported.stdout, compiler, work))
+        check(len(parsers) == 3, "%s: %d types, not 3" % (label, len(parsers)))
+        times = {6: [], 18: []}
+        floats = 0
+        for number, frame in enumerate(frames):
+            readers = []
+            for text, definition, parser in parsers:
+                try:
+                    obj, consumed, rebuilt = read_back(definition, parser, frame)
+                except (kaitaistruct.KaitaiStructError, EOFError):
+                    continue
+                if consumed == len(frame) and obj._io.is_eof() and rebuilt == frame:
+                    readers.append((text, obj))
+            check(len(readers) == 1, "%s frame %d: read by %d types, not 1" % (label, number, len(readers)))
+            if len(readers) != 1 or len(frame) != wide:
+                continue
+            text, obj = readers[0]
+            if protocol == "ubx":
+                for offset in times:
+                    times[offset].append(getattr(obj, "field_%d" % offset))
+                    check(times[offset][-1] == struct.unpack("<I", frame[offset:offset + 4])[0],
+                          "%s frame %d: the time at %d is not the u4le of the bytes" % (label, number, offset))
+            else:
+                for offset in range(10, 34, 4):
+                    check(getattr(obj, "field_%d" % offset) == struct.unpack("<f", frame[offset:offset + 4])[0],
+                          "%s frame %d: the float at %d is not the f4le of the bytes" % (label, number, offset))
+                floats = text.count("type: f4le")
+        if protocol == "ubx":
+            for offset, values in times.items():
+                steps = set((b - a) & 0xFFFFFFFF for a, b in zip(values, values[1:]))
+                check(len(values) > 30 and steps == {1000},
+                      "%s: the time at %d goes up by %s in %d frames, not by 1000" % (label, offset, sorted(steps), len(values)))
+        else:
+            check(floats == 6, "%s: %d floats in ATTITUDE, not 6" % (label, floats))
+        print("%s: %d frames read back by %d types, with %s" % (
+            label, len(frames), len(parsers), "two counters of 4 bytes" if protocol == "ubx" else "six floats"))
+
+
 def mapping(compiler, work):
     """Every kind of field the exporter writes, from the definition checked in."""
     text = (HERE / "mapping.ksy").read_text()
@@ -286,6 +349,7 @@ def main():
         modbus(args.bitwise, args.compiler, work)
         framed(args.bitwise, args.compiler, work)
         mavlink2(args.bitwise, args.compiler, work)
+        wide_numbers(args.bitwise, args.compiler, work)
         mapping(args.compiler, work)
     if FAILURES:
         print("%d check(s) failed" % len(FAILURES))

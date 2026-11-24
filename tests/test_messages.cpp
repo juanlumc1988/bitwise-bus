@@ -689,9 +689,10 @@ TEST_CASE("analyze: a header that does not break where the checksum starts is no
     }
 }
 
-TEST_CASE("analyze: a length with too many values to be one of a few is still the length, if it is alone") {
-    // 20 sizes of each of two messages: the length has 20 values, so it is a run of bytes of no structure, as
-    // the counter after it is, and the two are one run. Then it is not a field of its own, and nothing is put together.
+TEST_CASE("analyze: a length with too many values to be one of a few is still the length, next to a counter") {
+    // 20 sizes of each of two messages: the length has 20 values, so on its own it is a run of bytes of no structure,
+    // as the counter after it is, and the two would be one run. The length is a field of its own all the same, and
+    // what is before it and after it is read apart.
     fixtures::Random   rng(43);
     std::vector<Bytes> frames;
     std::uint8_t       counter = 0;
@@ -714,7 +715,17 @@ TEST_CASE("analyze: a length with too many values to be one of a few is still th
         }
     }
     const bw::Analysis a = analysis_of(frames);
-    CHECK(a.type_count() == 40);                                   // the sizes, each with its own type
+    REQUIRE(a.type_count() == 2);                                  // a type for each message, not for each size
+    const bw::Model m = a.model();
+    REQUIRE(m.field_count(0) == 6);                                // 0xAA, length, counter, id, payload, checksum
+    CHECK(m.field_name(0, 1) == "length");
+    CHECK(m.field(0, 1).kind == bw::FieldKind::Length);
+    CHECK(m.field(0, 1).bit_size == 8);
+    CHECK(m.field_position(0, 1).bit_offset == 8);
+    CHECK(m.field(0, 2).bit_size == 8);                            // the counter, as it is: not a part of the length
+    CHECK(m.field_position(0, 2).bit_offset == 16);
+    CHECK(m.field(0, 3).kind == bw::FieldKind::Constant);
+    CHECK(m.field(0, 3).constant == 1);
 }
 
 TEST_CASE("analyze: a length of two bytes is written with its order, in the model and in what Kaitai reads") {
@@ -840,9 +851,10 @@ TEST_CASE("analyze: a length of two bytes that reaches into the payload is not p
     CHECK(a.type_count() == 4);                  // the sizes, as before
 }
 
-TEST_CASE("analyze: a run of bytes with no structure across the start of the length is not a header") {
+TEST_CASE("analyze: a run of bytes with no structure before the length does not take the length with it") {
     // [start][id][counter][length, 2 bytes][payload][CRC]: the counter and the low byte of the length (which has 20
-    // values) are one run of bytes with no structure, which starts before the length does.
+    // values; the length is taken as the one byte it comes to, before the zeros of the other) would be one run of
+    // bytes with no structure, which starts before the length does.
     fixtures::Random   rng(62);
     std::vector<Bytes> frames;
     std::uint8_t       counter = 0;
@@ -870,7 +882,60 @@ TEST_CASE("analyze: a run of bytes with no structure across the start of the len
     REQUIRE(k.found);
     CHECK(k.length.offset == 3);
     const bw::Analysis a = analysis_of(frames);
-    CHECK(a.type_count() == 40);
+    REQUIRE(a.type_count() == 2);
+    const bw::Model m = a.model();
+    REQUIRE(m.field_count(0) == 7);                                // 0xAA, id, counter, length, zero, payload, checksum
+    CHECK(m.field(0, 2).kind == bw::FieldKind::Payload);
+    CHECK(m.field(0, 2).bit_size == 8);                            // the counter, as it is: not a part of the length
+    CHECK(m.field_name(0, 3) == "length");
+    CHECK(m.field(0, 3).kind == bw::FieldKind::Length);
+    CHECK(m.field(0, 3).bit_size == 8);
+    CHECK(m.field_position(0, 3).bit_offset == 24);
+    CHECK(m.field(0, 4).kind == bw::FieldKind::Constant);          // what is after it, apart
+    CHECK(m.field(0, 4).constant == 0);
+    CHECK(m.field(0, 6).covers_first == 1);                        // from the id
+}
+
+TEST_CASE("analyze: the length may be the first byte of the frame, or the last one of the header") {
+    // [length][id][payload][CRC from the first byte] and [id][length][payload][CRC]: size = length + 4 in both, and
+    // the header is the length and the id, with nothing before the length in one and nothing after it in the other.
+    const std::size_t payloads[2][2] = { { 3, 5 }, { 4, 8 } };
+    for (int first = 0; first < 2; ++first) {
+        fixtures::Random   rng(81 + first);
+        std::vector<Bytes> frames;
+        for (int n = 0; n < 10; ++n) {
+            for (std::size_t id = 1; id <= 2; ++id) {
+                for (std::size_t p = 0; p < 2; ++p) {
+                    const std::size_t payload = payloads[id - 1][p];
+                    Bytes             f;
+                    f.push_back(static_cast<std::uint8_t>(first ? payload : id));
+                    f.push_back(static_cast<std::uint8_t>(first ? id : payload));
+                    for (std::size_t i = 0; i < payload; ++i) {
+                        f.push_back(rng.byte());
+                    }
+                    const std::uint16_t crc = fixtures::crc16_modbus(f, 0, f.size());
+                    f.push_back(static_cast<std::uint8_t>(crc & 0xFF));
+                    f.push_back(static_cast<std::uint8_t>(crc >> 8));
+                    frames.push_back(f);
+                }
+            }
+        }
+        CAPTURE(first);
+        const bw::MessageKinds k = kinds_of(frames);
+        REQUIRE(k.found);
+        CHECK(k.length.offset == (first ? 0u : 1u));
+        const bw::Analysis a = analysis_of(frames);
+        REQUIRE(a.type_count() == 2);
+        const bw::Model m = a.model();
+        REQUIRE(m.field_count(0) == 4);                            // the length and the id, the payload, the checksum
+        const std::size_t at = first ? 0 : 1;
+        CHECK(m.field_name(0, at) == "length");
+        CHECK(m.field(0, at).kind == bw::FieldKind::Length);
+        CHECK(m.field(0, at).bit_size == 8);
+        CHECK(m.field(0, 1 - at).kind == bw::FieldKind::Constant);
+        CHECK(m.field_name(0, 2) == "payload");
+        CHECK(m.field(0, 3).covers_first == 0);
+    }
 }
 
 TEST_CASE("message kinds: a frame shorter than the header is in no kind, and is not read beyond its end") {

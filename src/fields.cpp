@@ -3,6 +3,7 @@
 
 #include "bw/fields.h"
 
+#include <algorithm>
 #include <bitset>
 #include <limits>
 #include <stdexcept>
@@ -129,6 +130,234 @@ void type_region(FieldRegion* region, const std::vector<Bytes>& frames) {
     region->evidence_bits = 0;
 }
 
+// ---- Numbers of several bytes ----------------------------------------------------------------------------
+//
+// Stage 4 sees bytes, so a number of several bytes comes out in pieces: a counter of four bytes has a low half
+// that changes all the time, a third byte that changes once in a while and a fourth that has not changed yet;
+// a float has bytes of mantissa that change and a byte of exponent that takes a few values. What follows puts the
+// pieces together when the bytes, taken as a number, show it, and only then. (A byte that varies next to bytes that
+// are always zero is not put together with them: it may be a small number in two bytes or a byte and some flags,
+// and nothing tells which.) It works on the regions that typing has made, never on a checksum.
+
+bool varies(const FieldRegion& region) {
+    return region.structure != FieldStructure::Constant && region.kind != FieldKind::Checksum;
+}
+
+// The two regions, which are next to each other, as one.
+FieldRegion span_of(const FieldRegion& first, const FieldRegion& last) {
+    FieldRegion out;
+    out.byte_offset = first.byte_offset;
+    out.byte_size   = last.byte_offset + last.byte_size - first.byte_offset;
+    out.structure   = FieldStructure::Many;
+    return out;
+}
+
+// The regions first to last, as one.
+FieldRegion join(const std::vector<FieldRegion>& regions, std::size_t first, std::size_t last) {
+    return span_of(regions[first], regions[last]);
+}
+
+// The widest window of regions from `first` that is a counter in a byte order: the same non-zero step from each
+// frame to the next. Its first and last regions vary, since a window that ends in a byte that never changes says
+// nothing about it (a counter of one byte next to a zero is also a counter of two, if it never wraps).
+bool counter_window(const std::vector<FieldRegion>& regions, std::size_t first, const std::vector<Bytes>& frames,
+                    FieldRegion* out, std::size_t* last) {
+    if (frames.size() < 3 || !varies(regions[first])) {
+        return false;
+    }
+    bool found = false;
+    for (std::size_t j = first + 1; j < regions.size() && regions[j].kind != FieldKind::Checksum; ++j) {
+        FieldRegion window = join(regions, first, j);
+        if (window.byte_size > 8) {
+            break;
+        }
+        if (!varies(regions[j])) {
+            continue;
+        }
+        const ByteOrder orders[2] = { ByteOrder::Big, ByteOrder::Little };
+        for (int t = 0; t < 2; ++t) {
+            std::uint64_t step = 0;
+            if (is_counter(frames, window, orders[t], &step)) {
+                window.kind          = FieldKind::Counter;
+                window.byte_order    = orders[t];
+                window.step          = step;
+                window.evidence_bits = saturate(8 * static_cast<std::uint64_t>(window.byte_size) *
+                                                (frames.size() - 2));
+                *out   = window;
+                *last  = j;
+                found  = true;
+                break;
+            }
+        }
+    }
+    return found;
+}
+
+// Four bytes that, as an IEEE 754 float in this byte order, are in a plausible range in nearly all of the frames
+// where they are not zero, and whose two lowest bytes of mantissa are as random as the digits of a measurement
+// are: at least 8 values each, and a half of the frames' worth if there are fewer than 16 frames (so a value that
+// never changes is no float). Random bytes are not in the range (the exponent is one of 49 values in 256), nor are
+// small integers (their exponent is 0), nor counters (taken before); and flags, which can have a byte on top that
+// makes them look like a float, have few values in the bytes below it. The byte on top, which has the sign and
+// most of the exponent, is often constant, and so a window may start at a constant region. Four bytes that are
+// printable characters in every frame are text, where digits stand in the places of an exponent and a mantissa.
+bool plausible_float(const std::vector<Bytes>& frames, const FieldRegion& window, ByteOrder order) {
+    std::size_t nonzero  = 0;
+    std::size_t in_range = 0;
+    const std::size_t needed = std::min<std::size_t>(8, frames.size() / 2);
+    for (std::uint32_t k = 0; k < 2; ++k) {
+        const std::uint32_t at = window.byte_offset + (order == ByteOrder::Little ? k : 3 - k);
+        std::bitset<256>    seen;
+        for (std::size_t i = 0; i < frames.size(); ++i) {
+            seen.set(frames[i][at]);
+        }
+        if (seen.count() < needed) {
+            return false;
+        }
+    }
+    for (std::size_t i = 0; i < frames.size(); ++i) {
+        const std::uint64_t bits = value_of(frames[i], window, order);
+        if ((bits & 0x7FFFFFFFULL) == 0) {
+            continue;                                   // zero, either sign
+        }
+        ++nonzero;
+        const std::uint64_t exponent = (bits >> 23) & 0xFF;
+        if (exponent >= 0x68 && exponent <= 0x98) {     // about 1e-7 to 4e7
+            ++in_range;
+        }
+    }
+    return nonzero * 2 >= frames.size() && in_range * 100 >= nonzero * 95;
+}
+
+bool printable_text(const std::vector<Bytes>& frames, const FieldRegion& window) {
+    for (std::size_t i = 0; i < frames.size(); ++i) {
+        for (std::uint32_t k = 0; k < window.byte_size; ++k) {
+            const std::uint8_t byte = frames[i][window.byte_offset + k];
+            if (byte < 0x20 || byte > 0x7E) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool float_window(const std::vector<FieldRegion>& regions, std::size_t first, const std::vector<Bytes>& frames,
+                  FieldRegion* out, std::size_t* last) {
+    if (frames.size() < 8) {
+        return false;
+    }
+    std::uint32_t size = 0;
+    std::size_t   j    = first;
+    for (; j < regions.size() && regions[j].kind != FieldKind::Checksum && size < 4; ++j) {
+        size += regions[j].byte_size;
+    }
+    if (size != 4) {
+        return false;
+    }
+    FieldRegion window = join(regions, first, j - 1);
+    if (printable_text(frames, window)) {
+        return false;
+    }
+    const ByteOrder orders[2] = { ByteOrder::Little, ByteOrder::Big };
+    for (int t = 0; t < 2; ++t) {
+        if (plausible_float(frames, window, orders[t])) {
+            window.kind          = FieldKind::Float;
+            window.byte_order    = orders[t];
+            window.evidence_bits = saturate(frames.size());
+            *out  = window;
+            *last = j - 1;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool natural_size(std::uint32_t size) {
+    return size == 1 || size == 2 || size == 4 || size == 8;
+}
+
+// A counter of 3, 5, 6 or 7 bytes is a counter of 4 or 8 that has not yet changed in its top bytes. They are the
+// constant regions next to it (after it if it is little-endian, before it if it is big-endian; `nearest_first`),
+// if those are exactly what is missing. How many of them there are, or none.
+std::size_t padding_for(const std::vector<FieldRegion>& nearest_first, std::uint32_t size) {
+    const std::uint32_t natural = size <= 4 ? 4 : 8;
+    std::uint32_t       have    = size;
+    for (std::size_t k = 0; k < nearest_first.size(); ++k) {
+        if (nearest_first[k].structure != FieldStructure::Constant) {
+            return 0;
+        }
+        have += nearest_first[k].byte_size;
+        if (have >= natural) {
+            return have == natural ? k + 1 : 0;
+        }
+    }
+    return 0;
+}
+
+// The counter with the constant bytes that bring it to the size of a number, if it is still a counter with them.
+// `out` is what has been put out so far, and `last` the region of the input where the counter ends; they are
+// changed when it takes regions of either.
+void pad_counter(const std::vector<FieldRegion>& regions, const std::vector<Bytes>& frames,
+                 std::vector<FieldRegion>* out, FieldRegion* counter, std::size_t* last) {
+    if (natural_size(counter->byte_size)) {
+        return;
+    }
+    const bool little = counter->byte_order == ByteOrder::Little;
+    std::vector<FieldRegion> nearest;
+    for (std::size_t k = 0; k < 8; ++k) {
+        if (little && *last + 1 + k < regions.size()) {
+            nearest.push_back(regions[*last + 1 + k]);
+        } else if (!little && k < out->size()) {
+            nearest.push_back((*out)[out->size() - 1 - k]);
+        }
+    }
+    const std::size_t take = padding_for(nearest, counter->byte_size);
+    if (take == 0) {
+        return;
+    }
+    FieldRegion padded = little ? span_of(*counter, nearest[take - 1]) : span_of(nearest[take - 1], *counter);
+    std::uint64_t step = 0;
+    if (!is_counter(frames, padded, counter->byte_order, &step)) {
+        return;
+    }
+    padded.kind          = FieldKind::Counter;
+    padded.byte_order    = counter->byte_order;
+    padded.step          = step;
+    padded.evidence_bits = counter->evidence_bits;
+    *counter             = padded;
+    if (little) {
+        *last += take;
+    } else {
+        out->resize(out->size() - take);
+    }
+}
+
+std::vector<FieldRegion> merge_numbers(const std::vector<FieldRegion>& regions, const std::vector<Bytes>& frames) {
+    std::vector<FieldRegion> out;
+    std::size_t i = 0;
+    while (i < regions.size()) {
+        FieldRegion merged;
+        std::size_t last = i;
+        // A counter that is several regions together, or one that typing found in a region of its own.
+        const bool window = counter_window(regions, i, frames, &merged, &last);
+        if (window || regions[i].kind == FieldKind::Counter) {
+            if (!window) {
+                merged = regions[i];
+            }
+            pad_counter(regions, frames, &out, &merged, &last);
+            out.push_back(merged);
+            i = last + 1;
+        } else if (float_window(regions, i, frames, &merged, &last)) {
+            out.push_back(merged);
+            i = last + 1;
+        } else {
+            out.push_back(regions[i]);
+            ++i;
+        }
+    }
+    return out;
+}
+
 } // namespace
 
 FieldMap::FieldMap() {}
@@ -242,12 +471,17 @@ FieldMap type_fields(const FieldMap& layout, const Capture& capture,
         throw std::invalid_argument("the layout is of other frames than these");
     }
     const std::vector<Bytes> frames = frames_in(capture, spans);
+    std::vector<FieldRegion> typed;
     for (std::size_t i = 0; i < layout.region_count(); ++i) {
         FieldRegion region = layout.region(i);
         if (region.kind == FieldKind::Unknown) {
             type_region(&region, frames);
         }
-        out.add_region(region);
+        typed.push_back(region);
+    }
+    const std::vector<FieldRegion> merged = merge_numbers(typed, frames);
+    for (std::size_t i = 0; i < merged.size(); ++i) {
+        out.add_region(merged[i]);
     }
     return out;
 }

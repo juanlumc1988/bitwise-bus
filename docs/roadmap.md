@@ -43,9 +43,14 @@ the library useful as it is, and it ends:
    checksums, a hidden byte), message types by discriminator when a kind has
    frames of several sizes, the Kaitai exporter, the harness and six protocols
    to measure against.
-2. **Fields of stages 4 and 5**, in one pull request: numbers of two or three
-   bytes whose high bytes never change as one field, lengths in kinds of one
-   size, and text (NMEA 0183: fields separated by a character, of varying size).
+2. **Done**, fields of stages 4 and 5, in one pull request: counters of several
+   bytes and floats put together, and the length of a kind as a barrier, with what
+   is before it and after it read apart (a length with many values next to a
+   counter no longer keeps a kind from being made). Left out, for what they cost
+   against what they gain: numbers that are
+   only small (a byte with zeros next to it), the length of a kind of one size, and
+   text (NMEA 0183, fields separated by a character), which for 1.0 is framed
+   and checksummed but not split into fields.
 3. **The parametric generator**, with noise (corrupted bytes, lost frames) and a
    property test over thousands of seeds, in place of the named protocols of
    waves 2 and 3. What it finds is fixed in the same pull request.
@@ -139,7 +144,7 @@ Every stage starts as the simplest thing that can work:
 | 2 checksums | The existing CRC search, run over the segmented frames of each size. |
 | 3 segmentation | Split at the large idle gaps: the widest hole, in ratio, between the short gaps and the long ones. |
 | 4 discovery | Byte-offset statistics among frames of the same length; a run of bytes with no structure is one field. |
-| 5 typing | Constant, enum, counter; payload, which claims nothing, for the rest. |
+| 5 typing | Constant, enum, counter (of up to eight bytes), 32-bit float; payload, which claims nothing, for the rest. |
 | 6 export | Kaitai Struct. |
 
 Two things changed from the first plan, both for the same reason: a first
@@ -408,10 +413,10 @@ field with the position and size of a true one, `kind` also its kind. Pinned by
 |---|---|---|---|---|---|---|---|
 | UBX ACK-ACK | none | exact | 2 candidates | 8 / 10 | 9 / 11 / 9 | 6 | 5 |
 | UBX CFG-RATE | none | exact | Fletcher-8 | 9 / 13 | 10 / 14 / 10 | 5 | 5 |
-| UBX NAV-STATUS | none | exact | Fletcher-8 | 13 / 21 | 14 / 22 / 14 | 9 | 6 |
+| UBX NAV-STATUS | none | exact | Fletcher-8 | 13 / 17 | 14 / 18 / 14 | 11 | 6 |
 | MAVLink 1 HEARTBEAT | none | exact | CRC-16/MCRF4XX seeded with 50 | 13 / 16 | 14 / 17 / 14 | 12 | 9 |
 | MAVLink 1 SYS_STATUS | none | exact | CRC-16/MCRF4XX seeded with 124 | 20 / 38 | 21 / 39 / 21 | 8 | 6 |
-| MAVLink 1 ATTITUDE | none | exact | CRC-16/MCRF4XX seeded with 39 | 14 / 23 | 15 / 24 / 15 | 7 | 5 |
+| MAVLink 1 ATTITUDE | none | exact | CRC-16/MCRF4XX seeded with 39 | 14 / 17 | 15 / 18 / 15 | 13 | 11 |
 
 The checksum column is stage 2, searching the CRCs of the catalogue and the sums
 that are not CRCs (`bw/sums.h`). UBX's Fletcher-8 is found in two of its three
@@ -424,6 +429,23 @@ CRC has a seed that nothing in the frame holds, the byte of each message, and is
 found in all three messages with that byte (50, 124 and 39), as the truth says
 it: `checksum_match` is true. The CRC is a field of its own to stage 4, so every
 message gains a field of the right kind, and SYS_STATUS gains two exact fields.
+
+Stage 5 puts together the bytes of a number when, taken as one, they show what it is
+(`merge_numbers` in `src/fields.cpp`): a **counter** of two to eight bytes, whose
+value goes up by the same step from one frame to the next in either byte order (a
+counter of 3, 5, 6 or 7 bytes takes the constant bytes that bring it to 4 or 8), and a
+**float** of four bytes, in either order, whose exponent is in a plausible range
+in nearly all the frames and whose two low bytes of mantissa are as varied as a
+measurement is. That is the two 4-byte times of UBX NAV-STATUS (a step of 1000), and the
+time and the floats of ATTITUDE, which went from 23 fields to 17 and from 7 exact
+fields to 13; over the messages of the baselines of Modbus, UBX, MAVLink 1 and 2, SLIP and
+PPP, 98 exact fields became 106. A number that is only small, a byte that
+varies with bytes that are always zero next to it, is *not* put together: it can be a
+number of two bytes or a byte followed by flags, nothing in the frames tells, and
+every way of putting them together that was tried lost between 2 and 14 of the 161
+boundaries that are hit, for at most 3 exact fields more.
+The length is the one field that nothing is put together across: in a type made from
+a kind of several sizes, the bytes before it and after it are read apart.
 
 The first of the two frame columns is stage 3 by gaps, which finds nothing in a
 capture whose frames follow one another with nothing between them; the second is
@@ -503,9 +525,9 @@ Nothing is found by gaps in the binary protocols because there are none: the fra
 at the pace of the line. With the frames given, no checksum is found for lack
 of the algorithm, and the fields are cut too fine and typed with few of the
 kinds the truth has: a two-byte number with a high byte that never changes is two
-fields, an incrementing time is a counter, and the lengths, the sequence number
-and the floats come out as constants and payload. Every step of the list above
-moves a column of this table.
+fields, and the lengths, the sequence number and the flags come out as constants
+and payload (the incrementing time and the floats are put together). Every step
+of the list above moves a column of this table.
 
 ## Related projects (no shared code)
 
