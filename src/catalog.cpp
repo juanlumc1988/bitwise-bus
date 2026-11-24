@@ -32,6 +32,8 @@ const CrcSpec kCatalog[] = {
     { "CRC-16/KERMIT",      16,    0x1021,     0x0000,     true,  true,  0x0000,     0x2189 },
     { "CRC-16/GENIBUS",     16,    0x1021,     0xFFFF,     false, false, 0xFFFF,     0xD64E },
     { "CRC-16/DNP",         16,    0x3D65,     0x0000,     true,  true,  0xFFFF,     0xEA82 },
+    // The FCS of HDLC, PPP (RFC 1662) and X.25, also Bluetooth and PNG's cousins: CRC-16/X-25.
+    { "CRC-16/IBM-SDLC",    16,    0x1021,     0xFFFF,     true,  true,  0xFFFF,     0x906E },
 
     { "CRC-32/ISO-HDLC",    32,    0x04C11DB7, 0xFFFFFFFF, true,  true,  0xFFFFFFFF, 0xCBF43926 },
     { "CRC-32/BZIP2",       32,    0x04C11DB7, 0xFFFFFFFF, false, false, 0xFFFFFFFF, 0xFC891918 },

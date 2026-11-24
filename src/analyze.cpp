@@ -142,9 +142,28 @@ Analysis analyze_frames(const Capture& capture, const Segmentation& segmentation
     }
     info.frames = segmentation.frame_count();
 
+    // The later stages read the frames as the bytes of the protocol: for flagged frames, without the flags
+    // and with the stuffing undone, which is what a checksum is over and what the model describes.
+    Capture      contents;
+    Segmentation whole;
+    if (info.segmentation.kind == FramingKind::Flagged) {
+        contents = frame_contents(capture, segmentation);
+        std::vector<FrameSpan> spans;
+        for (std::size_t i = 0; i < contents.event_count(); ++i) {
+            FrameSpan span;
+            span.first_event = i;
+            span.event_count = 1;
+            spans.push_back(span);
+        }
+        whole = Segmentation(info.segmentation, spans);
+    }
+    const bool           stripped = info.segmentation.kind == FramingKind::Flagged;
+    const Capture&       read     = stripped ? contents : capture;
+    const Segmentation&  frames   = stripped ? whole : segmentation;
+
     std::map<std::uint64_t, std::uint64_t> by_size;      // frame size -> how many frames
-    for (std::size_t i = 0; i < segmentation.frame_count(); ++i) {
-        ++by_size[frame_size(capture, segmentation.frame(i))];
+    for (std::size_t i = 0; i < frames.frame_count(); ++i) {
+        ++by_size[frame_size(read, frames.frame(i))];
     }
     std::vector<std::pair<std::uint64_t, std::uint64_t> > types;   // (frames, size)
     for (std::map<std::uint64_t, std::uint64_t>::const_iterator it = by_size.begin();
@@ -190,11 +209,10 @@ Analysis analyze_frames(const Capture& capture, const Segmentation& segmentation
         MessageTypeReport report;
         report.frame_bytes = size;
         report.frames      = static_cast<std::uint32_t>(types[t].first);
-        report.checksum    = find_checksum(capture, segmentation, size);
+        report.checksum    = find_checksum(read, frames, size);
 
-        const FieldMap layout = discover_fields(capture, segmentation, report.checksum, size,
-                                                options.fields);
-        const FieldMap typed  = type_fields(layout, capture, segmentation);
+        const FieldMap layout = discover_fields(read, frames, report.checksum, size, options.fields);
+        const FieldMap typed  = type_fields(layout, read, frames);
 
         const std::size_t type = model.add_message_type("type" + number(t));
         add_fields(&model, type, typed, report.checksum);

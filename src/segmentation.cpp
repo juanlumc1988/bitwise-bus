@@ -596,6 +596,46 @@ std::vector<std::uint8_t> frame_bytes(const Capture& capture, const FrameSpan& f
     return out;
 }
 
+Capture frame_contents(const Capture& capture, const Segmentation& segmentation) {
+    const SegmentationInfo info = segmentation.info();
+    Capture                out;
+    for (std::uint32_t c = 1; c < capture.channel_count(); ++c) {
+        out.add_channel(capture.channel_name(c));
+    }
+    for (std::size_t i = 0; i < segmentation.frame_count(); ++i) {
+        const FrameSpan                 frame = segmentation.frame(i);
+        const std::vector<std::uint8_t> wire  = frame_bytes(capture, frame);
+        std::vector<std::uint8_t>       content;
+        if (info.kind != FramingKind::Flagged) {
+            content = wire;
+        } else {
+            std::size_t first = 0;
+            std::size_t end   = wire.size();
+            if (first < end && wire[first] == info.delimiter) {
+                ++first;
+            }
+            if (first < end && wire[end - 1] == info.delimiter) {
+                --end;
+            }
+            for (std::size_t k = first; k < end; ++k) {
+                if (info.escaped && wire[k] == info.escape && k + 1 < end &&
+                    (wire[k + 1] == info.delimiter_code || wire[k + 1] == info.escape_code)) {
+                    content.push_back(wire[k + 1] == info.delimiter_code ? info.delimiter : info.escape);
+                    ++k;
+                } else {
+                    content.push_back(wire[k]);
+                }
+            }
+        }
+        EventInfo event;
+        if (frame.event_count > 0) {
+            event = capture.event(static_cast<std::size_t>(frame.first_event));
+        }
+        out.add_event(event, content);
+    }
+    return out;
+}
+
 std::uint64_t frame_size(const Capture& capture, const FrameSpan& frame) {
     std::uint64_t size = 0;
     for (std::uint64_t i = 0; i < frame.event_count; ++i) {

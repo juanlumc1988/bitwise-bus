@@ -13,6 +13,11 @@
 // no structure found is a Payload. The report next to the model says what was
 // seen and how much evidence there is.
 //
+// The frames are read as the bytes of the protocol (frame_contents() in
+// bw/segmentation.h): flagged frames without their flags and with the stuffing
+// undone, which is what a checksum is taken over and what a field is of. A size
+// is the size of that.
+//
 // Message types are, for now, frame sizes, named type0, type1... in order of
 // how many frames each has (most first, the smaller size first on a tie). The
 // fields of a type are named field_N after the byte offset N they start at, and
