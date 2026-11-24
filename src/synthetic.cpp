@@ -464,6 +464,202 @@ std::vector<std::uint8_t> make_frame(const Plan& p, TypePlan* t, Rng* rng) {
     return frame;
 }
 
+
+// ---- Lines of text --------------------------------------------------------------------------------------------------
+
+// A field of a sentence: the same in all of them (possibly nothing at all), a whole number, a decimal number, or one of a few
+// words.
+struct Word {
+    enum Sort { kSame, kWhole, kDecimal, kChoice } sort = kSame;
+    std::string              same;               // kSame
+    unsigned                 digits = 1;         // kWhole: at most this many; kDecimal: before the point
+    std::vector<std::string> choices;            // kChoice
+};
+
+struct Sentence {
+    std::string       address;                   // letters, in front of the first separator
+    std::vector<Word> words;
+};
+
+struct TextPlan {
+    char                  separator = ',';
+    std::string           start;                 // nothing, or one character that the checksum leaves out
+    bool                  check     = false;     // the exclusive or of what is between, as two characters after a star
+    bool                  crlf      = false;
+    std::uint64_t         char_ns   = 0;
+    std::vector<Sentence> kinds;
+};
+
+std::string letters(Rng* rng, unsigned n) {
+    std::string out;
+    for (unsigned i = 0; i < n; ++i) {
+        out += static_cast<char>('A' + rng->below(26));
+    }
+    return out;
+}
+
+TextPlan make_text_plan(Rng* rng) {
+    static const char kSeparators[4] = { ',', ';', '|', ' ' };
+    static const char kStarts[4]     = { '$', '!', '#', '\0' };
+    static const std::uint64_t kChars[3] = { 2083333, 1041666, 86805 };
+
+    TextPlan p;
+    p.separator = kSeparators[rng->below(4)];
+    const char start = kStarts[rng->below(4)];
+    p.start     = start == '\0' ? std::string() : std::string(1, start);
+    p.check     = rng->below(3) != 0;
+    p.crlf      = rng->below(2) == 0;
+    p.char_ns   = kChars[rng->below(3)];
+    const unsigned kinds = 1 + static_cast<unsigned>(rng->below(3));
+    while (p.kinds.size() < kinds) {
+        Sentence s;
+        s.address = letters(rng, 2 + static_cast<unsigned>(rng->below(5)));
+        bool again = false;
+        for (std::size_t k = 0; k < p.kinds.size(); ++k) {
+            again = again || p.kinds[k].address == s.address;
+        }
+        if (again) {
+            continue;
+        }
+        const unsigned words = 2 + static_cast<unsigned>(rng->below(6));
+        for (unsigned w = 0; w < words; ++w) {
+            Word word;
+            switch (rng->below(5)) {
+                case 0:
+                    word.sort = Word::kSame;
+                    word.same = letters(rng, static_cast<unsigned>(rng->below(4)));       // nothing, sometimes
+                    break;
+                case 1:
+                    word.sort   = Word::kWhole;
+                    word.digits = 1 + static_cast<unsigned>(rng->below(6));
+                    break;
+                case 2:
+                    word.sort   = Word::kDecimal;
+                    word.digits = 1 + static_cast<unsigned>(rng->below(4));
+                    break;
+                default: {
+                    word.sort = Word::kChoice;
+                    const unsigned n = 2 + static_cast<unsigned>(rng->below(3));
+                    while (word.choices.size() < n) {
+                        const std::string choice = letters(rng, 1);
+                        if (std::find(word.choices.begin(), word.choices.end(), choice) == word.choices.end()) {
+                            word.choices.push_back(choice);
+                        }
+                    }
+                }
+            }
+            s.words.push_back(word);
+        }
+        p.kinds.push_back(s);
+    }
+    return p;
+}
+
+// A number with the digits that it needs, without a leading zero.
+std::string number_text(Rng* rng, unsigned digits) {
+    std::string out;
+    for (unsigned i = 0; i < 1 + rng->below(digits); ++i) {
+        out += static_cast<char>((out.empty() ? '1' : '0') + rng->below(out.empty() ? 9 : 10));
+    }
+    return out;
+}
+
+std::string word_text(const Word& w, Rng* rng) {
+    switch (w.sort) {
+        case Word::kSame:
+            return w.same;
+        case Word::kWhole:
+            return number_text(rng, w.digits);
+        case Word::kDecimal: {
+            std::string out = number_text(rng, w.digits) + ".";
+            for (unsigned i = 0; i < 1 + rng->below(3); ++i) {
+                out += static_cast<char>('0' + rng->below(10));
+            }
+            return out;
+        }
+        case Word::kChoice:
+            return w.choices[static_cast<std::size_t>(rng->below(w.choices.size()))];
+    }
+    return std::string();
+}
+
+char last_delimiter(const TextPlan& p) {
+    return p.check ? '*' : (p.crlf ? '\r' : '\n');
+}
+
+std::vector<std::uint8_t> make_sentence(const TextPlan& p, const Sentence& s, Rng* rng) {
+    std::string line = p.start + s.address + p.separator;
+    for (std::size_t w = 0; w < s.words.size(); ++w) {
+        line += word_text(s.words[w], rng);
+        line += w + 1 < s.words.size() ? p.separator : last_delimiter(p);
+    }
+    if (p.check) {
+        // What is between the start and the star, as two characters, and then the end.
+        unsigned x = 0;
+        for (std::size_t i = p.start.size(); i + 1 < line.size(); ++i) {
+            x ^= static_cast<unsigned char>(line[i]);
+        }
+        static const char digits[] = "0123456789ABCDEF";
+        line += digits[(x >> 4) & 15];
+        line += digits[x & 15];
+        line += p.crlf ? "\r\n" : "\n";
+    } else if (p.crlf) {
+        line += "\n";                                   // the carriage return was the last field's
+    }
+    return std::vector<std::uint8_t>(line.begin(), line.end());
+}
+
+FieldInfo text_constant(const std::string& text) {
+    FieldInfo info = field(FieldKind::Constant, static_cast<unsigned>(text.size()), ByteOrder::Big);
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        info.constant = (info.constant << 8) | static_cast<unsigned char>(text[i]);
+    }
+    return info;
+}
+
+Model make_text_model(const TextPlan& p) {
+    Model       model;
+    FramingInfo framing;
+    framing.kind      = FramingKind::Terminated;
+    framing.delimiter = 0x0A;
+    model.set_framing(framing);
+    for (std::size_t k = 0; k < p.kinds.size(); ++k) {
+        const Sentence&   s    = p.kinds[k];
+        const std::size_t type = model.add_message_type("kind" + std::to_string(k));
+        if (!p.start.empty()) {
+            model.add_field(type, "start", text_constant(p.start), "");
+        }
+        const std::size_t address = model.add_field(type, "address", text_constant(s.address + p.separator), "");
+        std::size_t       last    = address;
+        for (std::size_t w = 0; w < s.words.size(); ++w) {
+            const char delimiter = w + 1 < s.words.size() ? p.separator : last_delimiter(p);
+            FieldInfo  info;
+            if (s.words[w].sort == Word::kSame) {
+                info = text_constant(s.words[w].same + delimiter);
+            } else {
+                info.kind      = FieldKind::Text;
+                info.size_kind = SizeKind::Delimited;
+                info.delimiter = static_cast<std::uint8_t>(delimiter);
+            }
+            last = model.add_field(type, "field_" + std::to_string(w), info, "");
+        }
+        if (p.check) {
+            FieldInfo check = field(FieldKind::Checksum, 2, ByteOrder::Big);
+            check.ascii_hex    = true;
+            check.covers_first = static_cast<std::uint32_t>(address);
+            check.covers_last  = static_cast<std::uint32_t>(last);
+            model.add_field(type, "checksum", check, "XOR-8");
+        }
+        // After the checksum the line ends with a carriage return and a line feed, or a line feed; with none the last
+        // field ends with the first of them.
+        const std::string end = p.check ? (p.crlf ? "\r\n" : "\n") : (p.crlf ? "\n" : "");
+        if (!end.empty()) {
+            model.add_field(type, "end", text_constant(end), "");
+        }
+    }
+    return model;
+}
+
 } // namespace
 
 Dataset generate_synthetic(const SyntheticOptions& options) {
@@ -507,6 +703,45 @@ Dataset generate_synthetic(const SyntheticOptions& options) {
         spans.push_back(span);
         types.push_back(static_cast<std::uint32_t>(kind));
         events += frame.size();
+    }
+    return Dataset(capture, model, spans, types);
+}
+
+Dataset generate_synthetic_text(const SyntheticOptions& options) {
+    if (options.frames > 100000) {
+        throw std::invalid_argument("frames is at most 100000");
+    }
+    if (options.jitter_permille > 500) {
+        throw std::invalid_argument("jitter_permille is at most 500");
+    }
+
+    Rng            rng(options.seed);
+    const TextPlan plan  = make_text_plan(&rng);
+    const Model    model = make_text_model(plan);
+
+    Capture             capture;
+    const std::uint32_t channel   = capture.add_channel("line");
+    const std::uint64_t max_delay = plan.char_ns * options.jitter_permille / 1000;
+
+    std::vector<FrameSpan>     spans;
+    std::vector<std::uint32_t> types;
+    std::uint64_t              start  = 0;
+    std::uint64_t              events = 0;
+    for (std::uint32_t i = 0; i < options.frames; ++i) {
+        const std::size_t               kind = static_cast<std::size_t>(rng.below(plan.kinds.size()));
+        const std::vector<std::uint8_t> line = make_sentence(plan, plan.kinds[kind], &rng);
+        start = emit_bytes(&capture, channel, start, plan.char_ns, max_delay, &rng, line);
+        // A pause after some of them, as after a burst of sentences.
+        if (rng.below(3) == 0) {
+            start += plan.char_ns * (5 + rng.below(16));
+        }
+
+        FrameSpan span;
+        span.first_event = events;
+        span.event_count = line.size();
+        spans.push_back(span);
+        types.push_back(static_cast<std::uint32_t>(kind));
+        events += line.size();
     }
     return Dataset(capture, model, spans, types);
 }

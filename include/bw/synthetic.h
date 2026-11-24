@@ -43,6 +43,16 @@ struct SyntheticOptions {
 // Throws std::invalid_argument for options out of range.
 Dataset generate_synthetic(const SyntheticOptions& options);
 
+// The same for lines of text, as NMEA 0183 has them: from one to three kinds of sentence, each with an address
+// (letters), then from two to seven fields that are the same in all of them (or empty), whole numbers, decimal
+// numbers or one of a few letters, with a separator (a comma, a semicolon, a bar or a space) after each and a
+// character in front of all of it, or none; a checksum, the exclusive or as two hexadecimal characters after a star,
+// or none; and a carriage return and a line feed, or a line feed. The frames are the lines, one event for each
+// byte, with a pause after some of them. What is true of each kind is in its model, with the text of the fields as
+// Text up to the byte that ends them, and what is the same in all of them as Constant. The options are those of
+// generate_synthetic.
+Dataset generate_synthetic_text(const SyntheticOptions& options);
+
 struct NoiseOptions {
     std::uint64_t seed             = 1;
     // Of every thousand frames, how many have one byte changed to another value

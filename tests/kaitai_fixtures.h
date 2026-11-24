@@ -36,11 +36,16 @@ inline bw::Model every_field() {
     model.add_field(t, "ratio",    fixed(bw::FieldKind::Float, 32, bw::ByteOrder::Little), "");
     model.add_field(t, "wide",     fixed(bw::FieldKind::Float, 64, bw::ByteOrder::Big), "");
     model.add_field(t, "name",     fixed(bw::FieldKind::Text, 32), "");
+    bw::FieldInfo line;
+    line.kind      = bw::FieldKind::Text;
+    line.size_kind = bw::SizeKind::Delimited;
+    line.delimiter = ',';
+    model.add_field(t, "line",     line, "");
     model.add_field(t, "stuff",    fixed(bw::FieldKind::Payload, 24), "");
     model.add_field(t, "odd",      fixed(bw::FieldKind::Counter, 24, bw::ByteOrder::Big), "");
     model.add_field(t, "magic",    constant_field(16, bw::ByteOrder::Little, 0x1234), "");
     model.add_field(t, "tail",     constant_field(32, bw::ByteOrder::Big, 0xDEADBEEF), "");
-    model.add_field(t, "checksum", checksum(16, bw::ByteOrder::Big, 0, 11), "CRC-16/CCITT-FALSE");
+    model.add_field(t, "checksum", checksum(16, bw::ByteOrder::Big, 0, 12), "CRC-16/CCITT-FALSE");
     return model;
 }
 

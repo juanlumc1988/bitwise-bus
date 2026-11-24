@@ -562,7 +562,9 @@ Segmentation segment_by_lines(const Capture& capture, const SegmentationOptions&
 namespace {
 
 // Does `fine` cut at every place inside the capture where `coarse` does, and in more places? The frames of
-// `fine` need not cover the capture, so a boundary is where one starts or ends.
+// `fine` need not cover the capture, so a boundary is where one starts or ends. A tenth of the places of `coarse`
+// may be missed: a line feed that arrives wrong joins two lines, and a flag or a sync byte that does, two frames,
+// and none of them is a reason for the silences to be the better evidence.
 bool refines(const Segmentation& fine, const Segmentation& coarse, std::uint64_t events) {
     if (fine.frame_count() <= coarse.frame_count()) {
         return false;
@@ -573,16 +575,19 @@ bool refines(const Segmentation& fine, const Segmentation& coarse, std::uint64_t
         edges.push_back(fine.frame(i).first_event + fine.frame(i).event_count);
     }
     std::sort(edges.begin(), edges.end());
+    std::uint64_t places = 0;
+    std::uint64_t missed = 0;
     for (std::size_t i = 0; i < coarse.frame_count(); ++i) {
         const std::uint64_t cuts[2] = { coarse.frame(i).first_event,
                                         coarse.frame(i).first_event + coarse.frame(i).event_count };
         for (int k = 0; k < 2; ++k) {
-            if (cuts[k] > 0 && cuts[k] < events && !std::binary_search(edges.begin(), edges.end(), cuts[k])) {
-                return false;
+            if (cuts[k] > 0 && cuts[k] < events) {
+                ++places;
+                missed += std::binary_search(edges.begin(), edges.end(), cuts[k]) ? 0 : 1;
             }
         }
     }
-    return true;
+    return missed * 10 <= places;
 }
 
 // How many sizes a tenth of the frames or more have. A length that says a size means something when frames
@@ -617,8 +622,13 @@ Segmentation segment_frames(const Capture& capture, const SegmentationOptions& o
             return flagged;
         }
     }
-    const Segmentation lines = sync.info().found ? Segmentation() : segment_by_lines(capture, options);
-    const Segmentation& fine = sync.info().found ? sync : lines;
+    // Text in lines is what it is whatever else the bytes of its sentences can be made to say: a separator after an
+    // address that is in the same place in each, and a letter after it that takes a few values, read as a sync byte
+    // and a length, make a chain that is self-consistent, with no break at all, in text that is regular enough, and
+    // nothing in the bytes tells that chain from the real one of printable frames with a line feed inside. Text that
+    // has lines is lines; a capture that is not text has none, and the sync byte and the length are all there is.
+    const Segmentation lines = segment_by_lines(capture, options);
+    const Segmentation& fine = lines.info().found ? lines : sync;
     if (!fine.info().found) {
         return gaps;
     }

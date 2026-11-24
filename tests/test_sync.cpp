@@ -726,18 +726,16 @@ TEST_CASE("sync: flags first, then gaps, and the sync bytes where there are no g
         CHECK(chosen.frame_count() == 90);
     }
 
-    // Text that is also frames that say their length: the sync byte and the length are the frames, and the lines,
-    // which cut each of them at a line feed that is inside, are not. 'S', a length that is printable (the size of
-    // the payload and 0x20, so that all is text), and a payload with a line feed in the middle and a tail of
-    // zero to two bytes, so that the length is one.
+    // Text that is also frames that say their length: 'S', a length that is printable (the size of the payload and 0x20, so
+    // that all is text), and a payload with a line feed in the middle and a tail of zero to two bytes, so that the length
+    // is one. Both read it, and the bytes do not say which is true: text that has lines is lines, and it is cut at the line
+    // feeds, which are inside the frames that the length says (the sync byte is what it finds when the capture is not text).
     {
         Bytes text;
-        std::vector<FrameSpan> frames;
         for (std::size_t i = 0; i < 40; ++i) {
             const std::size_t tail = i % 3;
-            const std::uint64_t first = text.size();
             text.push_back('S');
-            text.push_back(static_cast<std::uint8_t>(0x20 + 5 + tail));    // the payload: ab, the line feed, Z and the tail
+            text.push_back(static_cast<std::uint8_t>(0x20 + 5 + tail));
             text.push_back(static_cast<std::uint8_t>('a' + i % 10));
             text.push_back(static_cast<std::uint8_t>('k' + i % 10));
             text.push_back(0x0A);
@@ -745,13 +743,12 @@ TEST_CASE("sync: flags first, then gaps, and the sync bytes where there are no g
             for (std::size_t k = 0; k < tail; ++k) {
                 text.push_back(static_cast<std::uint8_t>('p' + (i + k) % 7));
             }
-            frames.push_back(span(first, text.size() - first));
         }
         REQUIRE(bw::segment_by_lines(capture_of(text), SegmentationOptions()).info().found);
         REQUIRE(by_sync(text).info().found);
         const Segmentation chosen = bw::segment_frames(capture_of(text), SegmentationOptions());
-        CHECK(chosen.info().kind == bw::FramingKind::Contiguous);
-        CHECK(same_frames(chosen, frames));
+        CHECK(chosen.info().kind == bw::FramingKind::Terminated);
+        CHECK(chosen.frame_count() == 40);
     }
 
     // Modbus RTU: gaps, and no sync.

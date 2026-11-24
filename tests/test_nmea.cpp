@@ -150,6 +150,8 @@ TEST_CASE("nmea0183: a seed is a capture, the same on every platform") {
     CHECK(golden::first_difference(csv(make(1, 6)), golden::read_file("synth_nmea0183_seed1_6frames.csv")) == "");
     CHECK(golden::first_difference(csv(make(3, 9, 300)),
                                    golden::read_file("synth_nmea0183_seed3_9frames_jitter300.csv")) == "");
+    CHECK(golden::first_difference(csv(make(3, 60, 300)),
+                                   golden::read_file("synth_nmea0183_seed3_60frames_jitter300.csv")) == "");
 }
 
 TEST_CASE("nmea0183: every sentence is one of the three, with the right checksum, and they alternate") {
@@ -328,12 +330,11 @@ TEST_CASE("nmea0183: the decoder refuses each way a sentence can be wrong") {
     CHECK_FALSE(bw::protocol_conforms("nmea0183", bytes_of(with_checksum("GPVTG,96.1,T,,M,2.7,N,5.0,K,$"))));
 }
 
-TEST_CASE("nmea0183 baseline: gaps find the seconds, not the sentences") {
+TEST_CASE("nmea0183 baseline: gaps find the seconds, the sentences are three types of text fields") {
     // Where the text protocols start: the silence between one second and the next is the only gap there is,
     // so segmentation by gaps finds bursts of three sentences. Every cut it makes is a real one, and two of
-    // each three real cuts are missed; and what the stages do with the bursts, or with the true sentences
-    // (which have as many sizes as the fields have widths, so that two kinds of sentence share a size and
-    // one kind has several), is not yet a model of the protocol. The numbers are those of seed 3, 90 sentences.
+    // each three real cuts are missed; the lines (bw/segmentation.h) find the sentences, and the fields are
+    // those that the commas make (bw/text.h). The numbers are those of seed 3, 90 sentences.
     const Dataset d = make(3, 90);
     const bw::Segmentation seg = bw::segment_by_gaps(d.capture(), bw::SegmentationOptions());
     REQUIRE(seg.info().found);
@@ -345,16 +346,19 @@ TEST_CASE("nmea0183 baseline: gaps find the seconds, not the sentences") {
     CHECK(s.found_boundaries == 31);
     CHECK(s.boundary_hits == 31);
 
-    // Given the true sentences: seven message types where there are three, and in each of them the exclusive
-    // or, written as two hexadecimal characters after the star, which is not covered, with the dollar left out
-    // and the carriage return and line feed after.
+    // Given the true sentences: the three types, each with as many fields as the true one (the dollar, the address,
+    // a field for each comma, the checksum, and the carriage return and line feed), and in each of them the exclusive
+    // or, written as two hexadecimal characters after the star, which is not covered, with the dollar left out.
     bw::SegmentationInfo info;
     info.found = true;
     const bw::Analysis a = bw::analyze_frames(d.capture(), bw::Segmentation(info, d.frames()), bw::AnalyzeOptions());
-    CHECK(a.type_count() == 7);
+    REQUIRE(a.type_count() == 3);
+    const bw::Model truth = d.model();
+    const bw::Model& m    = a.model();
+    REQUIRE(m.message_type_count() == 3);
     for (std::size_t t = 0; t < a.type_count(); ++t) {
-        const bw::ChecksumFinding& c = a.type_report(t).checksum;
         CAPTURE(t);
+        const bw::ChecksumFinding& c = a.type_report(t).checksum;
         REQUIRE(c.found);
         CHECK(bw::checksum_algorithm_name(c.algorithm) == "XOR-8");
         CHECK(c.ascii_hex);
@@ -364,23 +368,44 @@ TEST_CASE("nmea0183 baseline: gaps find the seconds, not the sentences") {
         CHECK(c.gap_bytes == 1);
         CHECK(c.trailer_skip == 2);
         CHECK(c.evidence_bits == 8 * c.distinct_frames);
+        CHECK(a.type_report(t).frames == 30);
 
-        // In the model: the star is a field of its own that the checksum does not cover, and the
-        // checksum is text, and covers from the first character after the dollar.
-        const bw::Model& m = a.model();
-        REQUIRE(t < m.message_type_count());
-        const std::size_t count = m.field_count(t);
-        REQUIRE(count >= 6);
-        const std::size_t checksum = count - 3;                      // then CR and LF
-        const bw::FieldInfo info = m.field(t, checksum);
-        CHECK(info.kind == bw::FieldKind::Checksum);
-        CHECK(info.ascii_hex);
-        CHECK(info.bit_size == 16);
-        CHECK(info.covers_first == 1);
-        CHECK(info.covers_last == checksum - 2);
+        // The types come in the order of the true ones (as many sentences of each, then by how they start).
+        REQUIRE(m.field_count(t) == truth.field_count(t));
+        const bw::FieldScore score = bw::score_fields(truth, t, m, t);
+        CHECK(score.checksum_match);
+        CHECK(score.exact_fields >= 2);                              // the dollar and the address
+        CHECK(score.kind_hits == score.exact_fields);
+        for (std::size_t f = 0; f < m.field_count(t); ++f) {
+            CAPTURE(f);
+            const bw::FieldInfo want = truth.field(t, f);
+            const bw::FieldInfo got  = m.field(t, f);
+            if (want.kind == FieldKind::Text) {
+                // The value is the same in every sentence of this capture or it is not: a constant that ends with the
+                // delimiter, or text up to it.
+                if (got.kind == FieldKind::Text) {
+                    CHECK(got.size_kind == bw::SizeKind::Delimited);
+                    CHECK(got.delimiter == want.delimiter);
+                } else {
+                    REQUIRE(got.kind == FieldKind::Constant);
+                    CHECK((got.constant & 0xFF) == want.delimiter);
+                }
+            } else {
+                CHECK(got.kind == want.kind);
+                CHECK(got.bit_size == want.bit_size);
+                CHECK(got.constant == want.constant);
+            }
+        }
+        const std::size_t checksum = m.field_count(t) - 2;           // then CR and LF
+        const bw::FieldInfo info_c = m.field(t, checksum);
+        CHECK(info_c.kind == FieldKind::Checksum);
+        CHECK(info_c.ascii_hex);
+        CHECK(info_c.bit_size == 16);
+        CHECK(info_c.covers_first == 1);
+        CHECK(info_c.covers_last == checksum - 1);                   // up to and including the star
         CHECK(m.field_detail(t, checksum) == "XOR-8");
-        CHECK(m.field(t, checksum - 1).kind == bw::FieldKind::Constant);
-        CHECK(m.field(t, checksum - 1).constant == '*');
+        CHECK(m.field_name(t, checksum) == "checksum");
+        CHECK(m.field(t, checksum + 1).constant == 0x0D0A);
     }
     CHECK(bw::describe_analysis(a).find("checksum XOR-8, written as two hexadecimal characters, evidence ") != std::string::npos);
 }

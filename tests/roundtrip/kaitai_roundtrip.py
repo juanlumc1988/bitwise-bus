@@ -10,7 +10,7 @@ definition says, has to be the frame, and the parser has to have used all of it.
 
 The frames are taken from the capture here, by what is known of how it was made
 (Modbus RTU: eight one-byte events; MAVLink 2: a start byte, a length, and the
-length plus 12 in all), and not by the pipeline, so that the
+length plus 12 in all; NMEA 0183: a line feed ends each sentence), and not by the pipeline, so that the
 segmentation under test is not also the one that checks it.
 
 Needs: the `bitwise` binary, node and the compiler (npm: kaitai-struct-compiler),
@@ -317,13 +317,58 @@ def wide_numbers(bitwise, compiler, work):
             label, len(frames), len(parsers), "two counters of 4 bytes" if protocol == "ubx" else "six floats"))
 
 
+def nmea(bitwise, compiler, work):
+    """Lines of text, as fields up to a separator: the three sentences of NMEA 0183 are three types.
+
+    The sentences are cut here at the line feeds. Each is read by the definitions of all the types, whose
+    constants (the address, GPGGA, GPRMC, GPVTG) refuse the sentences of the others, so it is read by exactly
+    one, which has to use all of it, give the same bytes back, and read as the checksum the two characters
+    that are the exclusive or of the bytes between the dollar and the star, worked out here from the frame."""
+    for seed in (1, 3):
+        label = "nmea0183 seed %d" % seed
+        capture = run([bitwise, "synth", "nmea0183", "--seed", seed, "--frames", 90]).stdout
+        path = work / "nmea.csv"
+        path.write_text(capture)
+        data = b"".join(frames_of_capture(capture, 1))
+        frames = [line + b"\n" for line in data.split(b"\n") if line]
+        parsers = []
+        for index in range(8):
+            exported = run([bitwise, "export", path, "--type", index, "--id", "sentence%d" % index])
+            if exported.returncode != 0:
+                break                              # no more types
+            parsers.append((exported.stdout,) + compile_ksy(exported.stdout, compiler, work))
+        check(len(parsers) == 3, "%s: %d types, not 3" % (label, len(parsers)))
+        check(all("terminator: 0x2c" in text and "include: true" in text for text, _, _ in parsers),
+              "%s: the fields are not text up to a comma" % label)
+        used = 0
+        for number, frame in enumerate(frames):
+            readers = []
+            for text, definition, parser in parsers:
+                try:
+                    obj, consumed, rebuilt = read_back(definition, parser, frame)
+                except (kaitaistruct.KaitaiStructError, EOFError):
+                    continue
+                if consumed == len(frame) and obj._io.is_eof() and rebuilt == frame:
+                    readers.append(obj)
+            check(len(readers) == 1, "%s frame %d: read by %d types, not 1" % (label, number, len(readers)))
+            if len(readers) != 1:
+                continue
+            used += 1
+            xor = 0
+            for byte in frame[1:frame.index(b"*")]:
+                xor ^= byte
+            check(readers[0].checksum == "%02X" % xor,
+                  "%s frame %d: the checksum read is %s, not the exclusive or %02X" % (label, number, readers[0].checksum, xor))
+        print("%s: %d sentences read back by %d types" % (label, used, len(parsers)))
+
+
 def mapping(compiler, work):
     """Every kind of field the exporter writes, from the definition checked in."""
     text = (HERE / "mapping.ksy").read_text()
     definition, parser = compile_ksy(text, compiler, work)
     frame = (bytes([0x7E, 5]) + struct.pack(">H", 0x0102) + struct.pack("<I", 0x0A0B0C0D) +
              struct.pack(">Q", 0x1122334455667788) + struct.pack("<f", 1.5) + struct.pack(">d", -2.25) +
-             b"BUS1" + bytes([9, 8, 7]) + bytes([0x01, 0x02, 0x03]) + bytes([0x34, 0x12]) +
+             b"BUS1" + b"hi," + bytes([9, 8, 7]) + bytes([0x01, 0x02, 0x03]) + bytes([0x34, 0x12]) +
              bytes([0xDE, 0xAD, 0xBE, 0xEF]))
     frame += struct.pack(">H", 0xBEEF)
     obj, consumed, rebuilt = read_back(definition, parser, frame)
@@ -332,6 +377,7 @@ def mapping(compiler, work):
     check(obj.total == 0x1122334455667788, "mapping: u8be read wrongly")
     check(obj.ratio == 1.5 and obj.wide == -2.25, "mapping: f4le, f8be read wrongly")
     check(obj.name == "BUS1" and obj.stuff == bytes([9, 8, 7]), "mapping: text and bytes read wrongly")
+    check(obj.line == "hi,", "mapping: text up to a terminator, which is kept, read wrongly")
     check(obj.odd == bytes([1, 2, 3]), "mapping: a 3-byte number is not 3 bytes")
     check(obj.checksum == 0xBEEF, "mapping: u2be checksum read wrongly")
     print("mapping: %d fields of every kind read back" % len(definition["seq"]))
@@ -350,6 +396,7 @@ def main():
         framed(args.bitwise, args.compiler, work)
         mavlink2(args.bitwise, args.compiler, work)
         wide_numbers(args.bitwise, args.compiler, work)
+        nmea(args.bitwise, args.compiler, work)
         mapping(args.compiler, work)
     if FAILURES:
         print("%d check(s) failed" % len(FAILURES))

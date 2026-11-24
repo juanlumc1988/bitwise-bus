@@ -205,8 +205,10 @@ Segmentation segment_by_lines(const Capture& capture, const SegmentationOptions&
 // The way the pipeline cuts: by flags if the capture has them; else by gaps, and
 // by a sync byte and a length, or by lines if it is text, where there are no gaps
 // or where that cuts at every place the gaps do and in more (frames that come in
-// bursts); else by whichever finds something. A sync byte and a length come before
-// lines.
+// bursts); else by whichever finds something. Lines come before a sync byte and a
+// length: text that has lines is lines, since a chain of frames that start with one
+// byte and say their length can be found in text that is regular enough, with no
+// break in it, and the bytes do not tell that from the real one.
 Segmentation segment_frames(const Capture& capture, const SegmentationOptions& options);
 
 // The frames of a segmentation as a capture of their own: one event for each,

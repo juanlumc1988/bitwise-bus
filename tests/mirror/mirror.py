@@ -477,6 +477,7 @@ CORPUS = [
     ("synth_ubx_seed3_40frames_jitter300.csv", "ubx", 3, 40, 300),
     ("synth_nmea0183_seed1_6frames.csv", "nmea0183", 1, 6, 0),
     ("synth_nmea0183_seed3_9frames_jitter300.csv", "nmea0183", 3, 9, 300),
+    ("synth_nmea0183_seed3_60frames_jitter300.csv", "nmea0183", 3, 60, 300),
     # Seeds with frames that have both of the escapes of the protocol in them.
     ("synth_slip_seed3_30frames.csv", "slip", 3, 30, 0),
     ("synth_slip_seed3_40frames_jitter300.csv", "slip", 3, 40, 300),

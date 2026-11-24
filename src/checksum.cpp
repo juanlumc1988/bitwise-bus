@@ -7,6 +7,7 @@
 #include <limits>
 #include <set>
 #include <stdexcept>
+#include <string>
 
 #include "bw/catalog.h"
 #include "bw/crc_search.h"
@@ -134,14 +135,42 @@ bool is_part_of(const SumHit& part, const SumHit& whole) {
            p.trailer_skip + p_field <= w.trailer_skip + w_field;
 }
 
-// Is `later` the same sum as `earlier`, only starting to cover after bytes that are zero in every frame? A zero
-// changes no sum, so the frames cannot say whether it is covered (the same rule as for the CRCs, bw/crc_search.h).
+// Do the bytes [from, to) of every frame add nothing to the sum? Zeros add nothing to any; to an exclusive or, bytes that
+// cancel add nothing either (the two letters of an address that are the same: GNGNS), and to a plain sum, bytes that add
+// up to a multiple of 256.
+bool adds_nothing(const SumSpec& spec, const std::vector<Frame>& frames, std::size_t from, std::size_t to) {
+    if (zero_bytes(frames, from, to)) {
+        return true;
+    }
+    const std::string name = spec.name;
+    const bool        xors = name == "XOR-8";
+    if (!xors && name != "SUM-8" && name != "SUM-8/NEGATED") {
+        return false;
+    }
+    for (std::size_t i = 0; i < frames.size(); ++i) {
+        if (to > frames[i].bytes.size()) {
+            return false;
+        }
+        unsigned total = 0;
+        for (std::size_t k = from; k < to; ++k) {
+            total = xors ? (total ^ frames[i].bytes[k]) : ((total + frames[i].bytes[k]) & 0xFFu);
+        }
+        if (total != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Is `later` the same sum as `earlier`, only starting to cover after bytes that add nothing in any frame? What adds
+// nothing changes no sum, so the frames cannot say whether it is covered (the same rule as for the CRCs, which have
+// only zeros, bw/crc_search.h).
 bool is_shifted(const SumHit& later, const SumHit& earlier, const std::vector<Frame>& frames) {
     const SumLayout& l = later.layout;
     const SumLayout& e = earlier.layout;
     return later.spec == earlier.spec && l.hex == e.hex && l.gap == e.gap && l.big_endian == e.big_endian &&
            l.trailer_skip == e.trailer_skip && e.header_skip < l.header_skip &&
-           zero_bytes(frames, e.header_skip, l.header_skip);
+           adds_nothing(*later.spec, frames, e.header_skip, l.header_skip);
 }
 
 // Does the CRC, at this place and with the hidden byte it was found with, explain this frame?

@@ -16,6 +16,8 @@
 //   - a field sized by an earlier length field (SizeKind::FromField) is `size:`
 //     and the name of that field, which has to be written as a number of 8, 16,
 //     32 or 64 bits: MAVLink's payload after its length;
+//   - text that ends with a byte (SizeKind::Delimited: the fields of a line of NMEA 0183) is a
+//     string with that `terminator`, which `include: true` keeps in it, as the model has it;
 //   - payload, enumerations, counters and checksums are the plain numbers or
 //     bytes they are in memory, and `doc` says what the model found about them
 //     and how much evidence there is. Kaitai has no checksum type and cannot
@@ -27,8 +29,8 @@
 //
 // Fields that Kaitai could describe but this exporter does not write yet are
 // refused, not approximated: a field that is not a whole number of bytes, or
-// that is sized by a length that Kaitai has no integer for, or is delimited, or
-// runs to the end. The stages produce none of them but a length of 24 bits.
+// that is sized by a length that Kaitai has no integer for, or runs to the end, or
+// is delimited and is not text. The stages produce none of them but a length of 24 bits.
 
 #ifndef BW_KAITAI_H
 #define BW_KAITAI_H
@@ -46,7 +48,8 @@ namespace bw {
 //
 // Throws std::out_of_range for a message type that the model does not have, and
 // std::invalid_argument for an id or a field name that is not valid, a field
-// that is not a whole number of bytes, and a field whose size is not fixed.
+// that is not a whole number of bytes, and a field whose size is not fixed (the
+// size of a field sized by a length or delimited text is written).
 std::string export_kaitai(const Model& model, std::size_t message_type, const std::string& id);
 
 } // namespace bw

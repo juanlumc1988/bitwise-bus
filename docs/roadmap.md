@@ -43,14 +43,15 @@ the library useful as it is, and it ends:
    checksums, a hidden byte), message types by discriminator when a kind has
    frames of several sizes, the Kaitai exporter, the harness and six protocols
    to measure against.
-2. **Done**, fields of stages 4 and 5, in one pull request: counters of several
+2. **Done**, fields of stages 4 and 5, in two pull requests: counters of several
    bytes and floats put together, and the length of a kind as a barrier, with what
    is before it and after it read apart (a length with many values next to a
-   counter no longer keeps a kind from being made). Left out, for what they cost
-   against what they gain: numbers that are
-   only small (a byte with zeros next to it), the length of a kind of one size, and
-   text (NMEA 0183, fields separated by a character), which for 1.0 is framed
-   and checksummed but not split into fields.
+   counter no longer keeps a kind from being made); and text in lines (NMEA 0183,
+   fields separated by a character), whose kinds of line are message types and whose
+   fields are the constants and the text up to the separator, with the checksum
+   written as hexadecimal characters among them. Left out, for what they cost
+   against what they gain: numbers that are only small (a byte with zeros next to
+   it), the length of a kind of one size, and numbers in text (a latitude is text).
 3. **Done**, the parametric generator, with noise (corrupted bytes, lost frames) and
    a property test over thousands of seeds, in place of the named protocols of
    waves 2 and 3. What it found was fixed in the same pull request: see
@@ -398,7 +399,8 @@ later, and several will lean on code written for Track A.
      a size is shared by two messages (the id is then not one value in it),
      and a length that is wrong in a single frame stops it, which is for the noise of
      the parametric generator. (b) What is left of the step is
-     in [Scope of 1.0](#scope-of-10): wide numbers, lengths of kinds of one size, and text.
+     in [Scope of 1.0](#scope-of-10): wide numbers and lengths of kinds of one size
+     (text is done, in the step after).
 - **Versions.** A minor version once the skeleton works, and 1.0 when the plan
   in [Scope of 1.0](#scope-of-10) is done: the API stable, and the stages meeting
   thresholds taken from the baselines.
@@ -484,16 +486,19 @@ sentence (they are the seconds, three sentences each), and every cut it makes is
 a real one, so 31 of the 91 true boundaries are hit. By lines, which is what the
 pipeline cuts text into, every sentence is found and only them: 200 of 200 on
 seeds 1 to 4, and the pipeline takes the lines over the gaps because they cut at
-every place the gaps do and in more. With the true sentences given, or the ones
-found, the stages group them by size, and the sentences of two kinds share
-sizes: they make seven message types where there are three, and the exclusive or
-is found in every one of the seven, written as two hexadecimal characters after
-the star, with the dollar not covered (header skip 1), the star not covered
-either (a gap of one byte) and the line end after (trailer skip 2): the evidence
-is 8 bits for each different sentence, since the two characters hold a byte. Scoring the
-fields of a sentence needs the harness to place fields that have no fixed place,
-which is part of stage 4, so the checksum does not yet count as matching the
-truth.
+the places the gaps do (nine in ten of them, at least) and in more. With the true sentences given, or the ones
+found, the stages used to group them by size, and the sentences of two kinds shared
+sizes: seven message types where there are three. Text is now read by its separator
+(`bw/text.h`): the comma that makes three kinds of sentence of 14, 12 and 9 fields, which
+are three message types, with as many fields as the truth's (18, 16 and 13): the dollar, the
+address, a field for each comma (a constant when it never changes in the capture, and else
+text up to the comma, with its values said when there are a few), the checksum and the line
+end. The exclusive or is found in each, written as two hexadecimal characters after the
+star, with the dollar not covered (header skip 1), the star not covered either (a gap of
+one byte) and the line end after (trailer skip 2); the evidence is 8 bits for each different
+sentence. The checksum matches the truth's in position, coverage and algorithm, and the
+fields that can be placed (the dollar and the address, the only ones before a field of text)
+are exact. The 300 seeds of 30, 90 and 200 sentences give the same.
 
 SLIP and PPP in HDLC-like framing are the first protocols with byte stuffing. On 300
 frames of seed 3 the line has a byte every character time throughout, so no gap is found,
@@ -585,6 +590,54 @@ nothing between frames of one size, any byte that never changes is as good a pla
 at as the start, so the generator makes at least two sizes there; a CRC with a byte of its
 own over frames of one size has several equivalent answers; frames that are all alike prove
 no checksum; and stuffing is recognised when both of its codes are in the capture.
+
+### Baseline over made-up text
+
+`bw::generate_synthetic_text` (`bitwise synth random-text`) is the same for lines of text: a
+separator that is a comma, a semicolon, a bar or a space, from one to three kinds of sentence
+with an address and from two to seven fields (the same in all, whole numbers, decimals, or one of
+a few letters), a start character or none, a checksum (the exclusive or as two characters after a
+star) or none, and a carriage return and a line feed or a line feed. 1000 protocols of 200
+sentences, seeds 1 to 1000, run through `analyze`; the types are counted for the kinds with twelve
+sentences or more, paired with the true ones by how they start; the checksum where the lines can
+show one (twelve different, and none for which the same sentences are explained by two
+layouts); *fields* are as many as the true type has (without a checksum, the start and the
+address are one, since nothing says where one ends). Pinned, with a margin, by
+`tests/test_synthetic_text.cpp`; `BW_SWEEP_SEEDS=1000 bw_tests -tc="text sweep*"` prints these
+numbers.
+
+| The line | Frames cut exactly | Types found | Checksum, the right one | Fields as many as the truth's | Types of no true kind | Checksum where there is none |
+|---|---|---|---|---|---|---|
+| as it is | 99.9% | 1966 of 1966 | 99.4% (1228 of 1235) | 99.5% (1828 of 1837) | 0 | 0 |
+| 1 frame in 50 with a byte wrong | 99.7% | 1966 of 1966 | 98.8% (1230 of 1245) | 99.1% (1830 of 1847) | 6 | 0 |
+| 1 frame in 20 lost | 99.9% | 1966 of 1966 | 99.4% (1228 of 1235) | 99.5% (1828 of 1837) | 0 | 0 |
+| 1 in 20 wrong and 1 in 20 lost | 99.3% | 1963 of 1966 | 96.5% (1226 of 1271) | 97.5% (1826 of 1872) | 61 | 0 |
+
+What it found, and was fixed in the same pull request:
+
+- **A separator and a letter are not a sync byte and a length.** In a text that is regular enough (one
+  kind of sentence, with a letter that takes two values) the separator after the address, and the letter
+  after it, made a chain of frames with its two breaks, and a chain with none in another: a
+  self-consistent chain of the wrong frames. Text that has lines is lines now; a capture that is not text
+  has none, and the chain is all there is. (`segment_frames`.)
+- **A line feed that arrives wrong is not a reason to believe the silences.** Lines that cut at every place
+  the gaps do, and in more, were preferred; one line feed gone joined two sentences, and the gaps (the bursts of
+  three sentences) won, with all that follows. A tenth of the places may now be missed (for the flags of
+  stage 3 as well, which were compared with the gaps in the same way).
+  A random protocol of the sweep of binary protocols, with a byte wrong in one frame in twenty and
+  one in twenty lost, went from 17 "frames" of the gaps to the 267 of its sync byte and its length.
+- **The exclusive or of bytes that cancel.** An address of GNGNS, or of two equal letters, adds nothing
+  to an exclusive or, so a checksum that covers it and one that starts after it explain the same frames: two
+  answers, "cannot tell", as with the zeros of the CRCs. It is one, and the one that covers them is kept;
+  the same for the plain sums and bytes that add up to 256.
+- **The separator with the longer start.** A line with a single comma, and a dollar, has as many of one as of
+  the other; the one whose lines have more in common up to it is the separator (the address, not the dollar).
+
+What it did not fix, and is said: lines whose sizes differ by more than four times (a sentence of 9 bytes
+among others of 40, in 1 protocol of 1000) are not cut as lines, as in stage 3 for every text; two layouts of the
+checksum that explain the same sentences (in 7 of 1235 types, a constant address whose bytes
+XOR to the star: covering the address and not the star is the same as covering the star and not the
+address) are two answers, and the checksum is not reported; and the numbers in text are text.
 
 ## Related projects (no shared code)
 
@@ -758,6 +811,21 @@ the reason the README gives for `rewind-mcu`.
   them with a length and a payload that it sizes, the line of `describe_analysis`, the
   export with `size: length`, and MAVLink 1, UBX, Modbus RTU, NMEA, PPP and SLIP as
   before.
+
+  **After the text fields** (`bw/text.h` is not one of the headers that are
+  bound, since it speaks in vectors, as `bw/messages.h` does; the comments of
+  `bw/kaitai.h`, `bw/segmentation.h` and `bw/analyze.h` changed, and so did the
+  exporter) it was the same once more: the same 45 files, no change to the headers
+  that matter or the annotations. From Python, 20 checks pass: the three kinds of
+  NMEA 0183 sentence as three types, with as many fields as the truth's (18, 16
+  and 13), the text fields as `SizeKind.Delimited` with their delimiter, the
+  checksum as hex text covering from the address, the Kaitai export with
+  `terminator` and `include`, the line of `describe_analysis`, and MAVLink 1 and 2, UBX,
+  Modbus RTU, PPP and SLIP as before. The Kaitai round trip, with the real compiler,
+  reads back the 90 sentences of each of two NMEA captures, each by exactly one
+  of the three definitions (the constant of the address refuses the others), and
+  the checksum that the parser reads is the exclusive or that the script works
+  out from the frame; and the mapping has a string up to a terminator.
 
   Not tried: any platform other than Linux x86-64, threads, callbacks and
   directors, large captures, Python versions other than 3.13. To repeat the
