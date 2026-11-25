@@ -31,6 +31,8 @@ import tempfile
 import kaitaistruct
 import yaml
 
+sys.dont_write_bytecode = True                   # no __pycache__ for the parsers: see compile_ksy
+
 HERE = pathlib.Path(__file__).resolve().parent
 FAILURES = []
 
@@ -50,14 +52,21 @@ def class_name(ksy_id):
 
 
 def compile_ksy(text, compiler, work):
-    """The parser class that the Kaitai compiler makes of a definition."""
+    """The parser class that the Kaitai compiler makes of a definition.
+
+    Each definition is compiled in a directory of its own. The same id is compiled again and again
+    (`sentence0` for every NMEA capture, `type0` for every Modbus one), and Python takes a compiled module
+    from `__pycache__` when the source has the same size and the same second of modification as the one it
+    was made from: on a fast machine two definitions of the same shape (the second kind of sentence of two
+    seeds is 3068 bytes in both) are written within a second, and the second was read by the first one's parser."""
     definition = yaml.safe_load(text)            # also says the YAML is valid
     ksy_id = definition["meta"]["id"]
-    (work / (ksy_id + ".json")).write_text(json.dumps(definition))
-    done = run(["node", HERE / "compile.js", compiler, work / (ksy_id + ".json"), work])
+    out = pathlib.Path(tempfile.mkdtemp(dir=work))
+    (out / (ksy_id + ".json")).write_text(json.dumps(definition))
+    done = run(["node", HERE / "compile.js", compiler, out / (ksy_id + ".json"), out])
     if done.returncode != 0:
         raise RuntimeError("the Kaitai compiler refused %s: %s" % (ksy_id, done.stderr.strip()))
-    spec = importlib.util.spec_from_file_location(ksy_id, work / (ksy_id + ".py"))
+    spec = importlib.util.spec_from_file_location(ksy_id, out / (ksy_id + ".py"))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return definition, getattr(module, class_name(ksy_id))
